@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+DS Style Thumbnail Scraper Cache/
+DS Style Thumbnail Scraper output/
+thumbnail_scraper_settings.json
+custom_roms.json
+exceptions.json
+*.exe
+*.log
+Thumbs.db
+desktop.ini
