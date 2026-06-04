@@ -278,7 +278,7 @@ def validate_custom_art_name(value: str) -> str:
     if name.lower().endswith(".bmp"):
         name = name[:-4].rstrip()
     if not name:
-        raise ValueError("Enter the ROM or folder name, or select the ROM file.")
+        raise ValueError("Enter the file or folder name, or select a file.")
     if any(ch in name for ch in '<>:"/\\|?*'):
         raise ValueError('Custom art names cannot contain: < > : " / \\ | ? *')
     if len(name) > 96:
@@ -1180,7 +1180,7 @@ class ThumbnailScraperApp(tk.Tk):
 
         actions = ttk.Frame(body, style="Panel.TFrame")
         actions.grid(row=0, column=1, sticky="n", padx=(0, 24))
-        ttk.Button(actions, text="Add ROM...", command=self.add_custom_roms).pack(anchor="w", fill="x", pady=(0, 8))
+        ttk.Button(actions, text="Add File...", command=self.add_custom_roms).pack(anchor="w", fill="x", pady=(0, 8))
         ttk.Button(actions, text="Enter Name...", command=self.add_custom_name).pack(anchor="w", fill="x", pady=(0, 8))
         ttk.Button(actions, text="Set Image...", command=self.set_custom_image).pack(anchor="w", fill="x", pady=(0, 8))
         ttk.Button(actions, text="Remove Selected", command=self.remove_custom_roms).pack(anchor="w", fill="x", pady=(0, 16))
@@ -1191,7 +1191,8 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Label(actions, text="Selected name").pack(anchor="w")
         self.custom_code_var = tk.StringVar()
         ttk.Entry(actions, textvariable=self.custom_code_var, width=22).pack(anchor="w", fill="x", pady=(4, 8))
-        ttk.Label(actions, text="Must exactly match the ROM filename without .gba, or the folder name.", style="Muted.TLabel", wraplength=170).pack(anchor="w", pady=(0, 8))
+        ttk.Label(actions, text="Must exactly match the filename without its extension, or the folder name.", style="Muted.TLabel", wraplength=170).pack(anchor="w", pady=(0, 4))
+        ttk.Label(actions, text="Up to 256 images can be used in each CUSTOM folder.", style="Muted.TLabel", wraplength=170).pack(anchor="w", pady=(0, 8))
         ttk.Button(actions, text="Apply Name", command=self.apply_custom_code).pack(anchor="w", fill="x", pady=(0, 16))
         ttk.Button(actions, text="Build Custom Art", style="Accent.TButton", command=self.build_custom_rom_output).pack(anchor="w", fill="x")
 
@@ -1202,7 +1203,7 @@ class ThumbnailScraperApp(tk.Tk):
         self.custom_preview_label = tk.Label(right, bg="#101a29", width=300, height=210)
         self.custom_preview_label.pack_propagate(False)
         self.custom_preview_label.pack(anchor="w", pady=(8, 6))
-        self.custom_preview_info = ttk.Label(right, text="Choose a ROM and image", style="Muted.TLabel", wraplength=340)
+        self.custom_preview_info = ttk.Label(right, text="Choose a file or name and image", style="Muted.TLabel", wraplength=340)
         self.custom_preview_info.pack(anchor="w")
         crop_row = ttk.Frame(right, style="Panel.TFrame")
         crop_row.pack(anchor="w", pady=(12, 0))
@@ -1605,7 +1606,7 @@ class ThumbnailScraperApp(tk.Tk):
         raise ValueError("Too many homebrew ROMs to auto-assign codes.")
 
     def add_custom_roms(self):
-        paths = filedialog.askopenfilenames(filetypes=[("GBA ROMs", "*.gba *.agb *.bin"), ("All files", "*.*")])
+        paths = filedialog.askopenfilenames(filetypes=[("All files", "*.*")])
         if not paths:
             return
         added = 0
@@ -1642,7 +1643,7 @@ class ThumbnailScraperApp(tk.Tk):
         dialog.transient(self)
         dialog.grab_set()
         dialog.resizable(False, False)
-        ttk.Label(dialog, text="ROM filename without .gba, or folder name").grid(row=0, column=0, sticky="w", padx=16, pady=(16, 6))
+        ttk.Label(dialog, text="Filename without its extension, or folder name").grid(row=0, column=0, sticky="w", padx=16, pady=(16, 6))
         name_var = tk.StringVar()
         entry = ttk.Entry(dialog, textvariable=name_var, width=42)
         entry.grid(row=1, column=0, sticky="ew", padx=16)

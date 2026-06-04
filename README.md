@@ -10,11 +10,12 @@ DS Style Thumbnail Scraper is a Windows desktop application for creating thumbna
 - Choose included game regions and regional artwork priority
 - Preview, crop, zoom, and reposition artwork
 - Set per-game exceptions
-- Create exact-name custom artwork for ROM hacks, homebrew, folders, and games with missing artwork
+- Create case-insensitive exact-name custom artwork for any file or folder
 - Generate `120 x 80` title thumbnails for `IMGS`
 - Generate `80 x 80` box thumbnails for `IMGS2`
 
 Exact-name custom artwork requires DS Style v6.6 or newer.
+Due to the GBA's RAM limitations, each `CUSTOM` folder can contain up to 256 images.
 
 ## Requirements
 
@@ -53,13 +54,17 @@ These folders are generated at runtime and are not part of the source repository
 
 ## Custom Artwork
 
-Custom artwork uses the exact ROM filename without `.gba`, or the exact folder name:
+Custom artwork uses the exact filename without its final extension, or the exact folder name:
 
 ```text
 IMGS/CUSTOM/Pokemon Emerald Rogue.bmp
 IMGS2/CUSTOM/Pokemon Emerald Rogue.bmp
 IMGS/CUSTOM/Game Boy Advance.bmp
 ```
+
+Files with the same name but different extensions share artwork. For example,
+`Game.gba` and `Game.gbc` both use `Game.bmp`. Names otherwise remain exact, so
+`Game (1)` and `Game (2)` use separate images.
 
 ## Related Repositories
 
