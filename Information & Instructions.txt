@@ -2,7 +2,7 @@
 
 Thank you for downloading DS Style Thumbnail Scraper v1.3.
 
-For DS Style v6.6 or newer.
+For DS Style v6.7 or newer.
 
 This tool creates thumbnail artwork for DS Style on the EZ-Flash Omega and Omega Definitive Edition.
 
@@ -65,7 +65,7 @@ Custom artwork matching is not case-sensitive.
 
 Due to the GBA's RAM limitations, each CUSTOM folder can contain up to 256 images.
 
-Older DS Style versions do not use the CUSTOM artwork folders, so this feature needs DS Style v6.6 or newer.
+Older DS Style versions do not use the CUSTOM artwork folders, so this feature needs DS Style v6.7 or newer.
 
 #####################################################################################
 
