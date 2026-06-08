@@ -39,11 +39,11 @@ This can take a while because it downloads thousands of images. If you stop it a
 
 ## Local Art Pack Converter
 
-`EZFlashGBALocalBoxArtPackThumbs.exe` converts an unzipped local art pack into the same EZ Flash thumbnail format. Put the executable beside the extracted pack folder, or pass the folder path on the command line. Art outside `Europe` folders is preferred; a `Europe` folder is used only as a fallback when no primary match exists.
+`EZFlashGBALocalBoxArtPackThumbs.exe` converts an unzipped local art pack into the same EZ Flash thumbnail format. Put the executable beside the extracted pack folder, or pass the folder path on the command line. The converter searches folders inside the selected pack automatically.
 
 ## DS Style Thumbnail Scraper
 
-`DS Style Thumbnail Scraper.exe` is a styled desktop app for building thumbnail packs from Libretro, local packs, IGDB, TheGamesDB, or ScreenScraper. Libretro and local packs work without accounts; the other providers require their own API credentials. It supports `120x80 -> IMGS` and `80x80 -> IMGS2`, region filters, preview search, multiple provider result choices, crop/zoom controls, per-game exceptions, local-image overrides, and run-by-run output folders under `DS Style Thumbnail Scraper output`.
+`DS Style Thumbnail Scraper.exe` is a styled desktop app for building thumbnail packs from Libretro or local artwork packs. It supports `120x80 -> IMGS` and `80x80 -> IMGS2`, region filters, preview search, artwork choices, crop/zoom controls, per-game exceptions, local-image overrides, and run-by-run output folders under `DS Style Thumbnail Scraper output`.
 
 DS Style Thumbnail Scraper v1.3 is made for DS Style v6.8 or newer. Older DS Style kernels do not use the `CUSTOM` exact-name artwork folders.
 
