@@ -1,0 +1,14 @@
+DS STYLE THUMBNAIL SCRAPER
+
+For DS Style v6.8 or newer.
+
+Open DS Style User Guide.pdf for complete instructions covering thumbnail packs, artwork sources, regions, previews and custom artwork.
+
+
+GETTING STARTED
+
+Run DS Style Thumbnail Scraper.exe.
+
+Finished artwork is saved in a dated folder inside DS Style Thumbnail Scraper output, beside the program.
+
+The scraper does not download games or modify ROM files.
