@@ -45,7 +45,7 @@ This can take a while because it downloads thousands of images. If you stop it a
 
 `DS Style Thumbnail Scraper.exe` is a styled desktop app for building thumbnail packs from Libretro or local artwork packs. It supports `120x80 -> IMGS` and `80x80 -> IMGS2`, region filters, preview search, artwork choices, crop/zoom controls, per-game exceptions, local-image overrides, and run-by-run output folders under `DS Style Thumbnail Scraper output`.
 
-DS Style Thumbnail Scraper v1.3 is made for DS Style v6.8 or newer. Older DS Style kernels do not use the `CUSTOM` exact-name artwork folders.
+DS Style Thumbnail Scraper v1.3 is made for DS Style v6.9 or newer. Older DS Style kernels do not use the `CUSTOM` exact-name artwork folders.
 
 Use `--overwrite` to replace existing thumbnails.
 
