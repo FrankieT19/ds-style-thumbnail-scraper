@@ -1,16 +1,20 @@
-# EZ Flash Omega DE GBA Thumbnail Maker
+# DS Style Thumbnail Scraper
 
-This tool scans `.gba` files, reads each ROM's internal 4-character game code, downloads matching Game Boy Advance box art from the public Libretro thumbnail set, and writes EZ Flash Omega/Omega DE compatible thumbnail BMPs.
+DS Style Thumbnail Scraper is a Windows desktop application for creating artwork packs for the **DS Style** custom kernel on the EZ-FLASH OMEGA and OMEGA Definitive Edition.
 
-Generated box art is standardized to `80x80`, scaled to fill the square, left edge preserved, extra pixels cut from the right, and any top/bottom crop centered.
+It builds both supported thumbnail formats from Libretro or a local artwork pack, and can create exact-name custom artwork for any file or folder.
 
-The official EZ Flash thumbnail pack uses:
+## Features
 
-- `120x80` pixels
-- 16-bit BMP, top-down rows, GBA BGR555 color
-- `IMGS/<first game-code char>/<second game-code char>/<GAMECODE>.bmp`
+- `120 x 80` title thumbnails for `IMGS`
+- `80 x 80` box thumbnails for `IMGS2`
+- Libretro and local artwork-pack sources
+- Region and artwork selection
+- Preview, crop, zoom, and per-entry adjustments
+- Exact-name custom artwork for files and folders
+- EZ-FLASH-compatible 15-bit BMP output
 
-Example: a ROM with header code `A22J` becomes `IMGS/A/2/A22J.bmp`.
+The Custom Art index supports up to 256 entries in each `CUSTOM` folder because of the cartridge's RAM limits.
 
 ## Setup
 
@@ -19,66 +23,32 @@ python -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
 ```
 
-If `python` opens the Microsoft Store, install Python for Windows first or disable the Store execution alias in Windows settings.
-
-## Use
-
-After building the `.exe`, you can place it in a folder with your `.gba` ROMs and double-click it. It scans that folder and every folder inside it, and writes thumbnails to an `IMGS` folder beside the executable.
+## Running From Source
 
 ```powershell
-.\.venv\Scripts\python ezflash_gba_thumbs.py "D:\GBA ROMs" --output "E:\IMGS"
+.\.venv\Scripts\python "DS Style Thumbnail Scraper.py"
 ```
 
-You can also run the Python script without arguments from this folder to use the same drop-in behavior.
+## Building The Executable
 
-## Full Library Builder
+```powershell
+.\build.ps1
+```
 
-`EZFlashGBAFullBoxArtThumbs.exe` does not need ROMs. It downloads the Libretro No-Intro GBA metadata mirror, uses each game's serial/header code, matches the release to Libretro box art, and creates a complete `IMGS` folder beside the executable.
+## User Guide
 
-This can take a while because it downloads thousands of images. If you stop it and run it again, existing thumbnails are skipped unless you use `--overwrite`.
+Read the complete [DS Style User Guide](https://frankiet19.github.io/omega-de-ds-style-kernel/) for artwork setup, custom thumbnails, installation, and troubleshooting.
 
-## Local Art Pack Converter
+## Related Repositories
 
-`EZFlashGBALocalBoxArtPackThumbs.exe` converts an unzipped local art pack into the same EZ Flash thumbnail format. Put the executable beside the extracted pack folder, or pass the folder path on the command line. The converter searches folders inside the selected pack automatically.
+- [DS Style kernel for OMEGA Definitive Edition](https://github.com/FrankieT19/omega-de-ds-style-kernel)
+- [DS Style kernel for original OMEGA](https://github.com/FrankieT19/omega-ds-style-kernel)
+- [DS Style Customiser](https://github.com/FrankieT19/ds-style-customiser)
 
-## DS Style Thumbnail Scraper
+## Contributing
 
-`DS Style Thumbnail Scraper.exe` is a styled desktop app for building thumbnail packs from Libretro or local artwork packs. It supports `120x80 -> IMGS` and `80x80 -> IMGS2`, region filters, preview search, artwork choices, crop/zoom controls, per-game exceptions, local-image overrides, and run-by-run output folders under `DS Style Thumbnail Scraper output`.
+Bug reports and focused pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-DS Style Thumbnail Scraper v1.3 is made for DS Style v6.9 or newer. Older DS Style kernels do not use the `CUSTOM` exact-name artwork folders.
+## Licence
 
-Use `--overwrite` to replace existing thumbnails.
-
-## Custom Art Overrides
-
-DS Style can also load exact-name custom thumbnails without editing ROM headers.
-
-The desktop app's `Custom Art` tab creates:
-
-- `IMGS/CUSTOM/<file or folder name>.bmp` for title thumbnails
-- `IMGS2/CUSTOM/<file or folder name>.bmp` for box thumbnails
-
-Example:
-
-- File: `Pokemon Emerald Rogue.gba`
-- Title thumbnail: `IMGS/CUSTOM/Pokemon Emerald Rogue.bmp`
-- Box thumbnail: `IMGS2/CUSTOM/Pokemon Emerald Rogue.bmp`
-
-Folder example:
-
-- Folder: `Game Boy Advance`
-- Title thumbnail: `IMGS/CUSTOM/Game Boy Advance.bmp`
-- Box thumbnail: `IMGS2/CUSTOM/Game Boy Advance.bmp`
-
-These files are checked before the normal header-code thumbnail, so they can override artwork for ROM hacks that still use their base game's internal header. If there is no matching custom file, DS Style falls back to the usual `IMGS/A/2/A22J.bmp` layout where possible. This is useful for ROM hacks, homebrew, translations, prototypes, folders, emulated games, or anything else that needs exact-name artwork.
-
-Use `--width 120 --height 80 --fit cover` if you want the official screenshot-sized canvas. Use `--fit contain` if you want padding instead of cropping. Use `--width 0` to return to variable-width art scaled only by height.
-
-Windows image viewers may show the generated BMP colors incorrectly. That is expected: EZ Flash thumbnail BMPs use the GBA's 15-bit color channel order inside a BMP container.
-
-## Notes
-
-- The tool does not download games. It only reads ROM headers from files you already have.
-- Matching depends mostly on the ROM filename, so clean No-Intro-style filenames work best.
-- If a game is missed, rename the ROM file closer to its normal release title and run again, or use another matching source later.
-- The first run caches the online box-art index in `DS Style Thumbnail Scraper Cache/libretro_gba_boxarts.json`; use `--refresh-index` to update it.
+Licensed under the Apache License 2.0. See [LICENSE](LICENSE).
