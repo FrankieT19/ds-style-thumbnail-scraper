@@ -83,7 +83,7 @@ GBA_CODE_OFFSET = 0xAC
 GBA_HEADER_CHECKSUM_OFFSET = 0xBD
 GBA_HEADER_MIN_SIZE = 0xC0
 WEB_HEADERS = {
-    "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) {APP_NAME}/1.3",
+    "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) {APP_NAME}/1.4",
     "Accept": "application/json,text/plain,*/*",
     "Accept-Language": "en-US,en;q=0.9",
 }
@@ -672,8 +672,12 @@ class ThumbnailScraperApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("1180x830")
-        self.minsize(1040, 770)
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        initial_width = min(1180, max(960, screen_width - 80))
+        initial_height = min(830, max(620, screen_height - 80))
+        self.geometry(f"{initial_width}x{initial_height}")
+        self.minsize(min(1040, initial_width), min(620, initial_height))
         self.base_dir = app_dir()
         self._seed_bundled_cache()
         self._set_window_icon()
@@ -931,7 +935,7 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Label(title_box, text="Build EZ Flash Omega DE thumbnail packs from online or local artwork.", style="Sub.TLabel").pack(anchor="w", pady=(3, 0))
         version_box = ttk.Frame(header, style="TFrame")
         version_box.pack(side="right", anchor="n")
-        ttk.Label(version_box, text="DS Style Thumbnail Scraper v1.3", style="HeaderVersion.TLabel").pack(anchor="e")
+        ttk.Label(version_box, text="DS Style Thumbnail Scraper v1.4", style="HeaderVersion.TLabel").pack(anchor="e")
         ttk.Label(version_box, text="For DS Style v6.9", style="HeaderVersion.TLabel").pack(anchor="e", pady=(4, 0))
 
         notebook = ttk.Notebook(self)
@@ -1194,7 +1198,6 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Label(actions, text="Must exactly match the filename without its extension, or the folder name.", style="Muted.TLabel", wraplength=170).pack(anchor="w", pady=(0, 4))
         ttk.Label(actions, text="Up to 256 images can be used in each CUSTOM folder.", style="Muted.TLabel", wraplength=170).pack(anchor="w", pady=(0, 8))
         ttk.Button(actions, text="Apply Name", command=self.apply_custom_code).pack(anchor="w", fill="x", pady=(0, 16))
-        ttk.Button(actions, text="Build Custom Art", style="Accent.TButton", command=self.build_custom_rom_output).pack(anchor="w", fill="x")
 
         right = ttk.Frame(body, style="Panel.TFrame")
         right.grid(row=0, column=2, sticky="nw")
@@ -1212,6 +1215,15 @@ class ThumbnailScraperApp(tk.Tk):
             control.pack(side="left", padx=(0, 10))
             ttk.Label(control, text=label).pack(anchor="w")
             tk.Scale(control, variable=var, from_=from_, to=to, resolution=0.05 if label == "Zoom" else 1, orient="horizontal", length=120, bg="#152235", fg="#edf4fb", troughcolor="#101a29", activebackground="#263a57", highlightthickness=0, command=lambda _v: self.on_custom_crop_changed()).pack(anchor="w")
+
+        custom_footer = ttk.Frame(self.custom_tab, style="Panel.TFrame")
+        custom_footer.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        ttk.Button(
+            custom_footer,
+            text="Build Custom Art",
+            style="Accent.TButton",
+            command=self.build_custom_rom_output,
+        ).pack(side="left")
 
     def _build_exceptions_tab(self):
         ttk.Label(self.exceptions_tab, text="Per-game Exceptions", style="Section.TLabel").pack(anchor="w")
