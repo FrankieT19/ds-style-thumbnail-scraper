@@ -4,6 +4,10 @@ DS Style Thumbnail Scraper is a Windows desktop application for creating artwork
 
 It builds both supported thumbnail formats from Libretro or a local artwork pack, and can create exact-name custom artwork for any file or folder.
 
+## DS Style Homepage
+
+Visit the [DS Style homepage](https://frankiet19.github.io/omega-de-ds-style-kernel/project/) for an overview, kernel downloads, tools and example themes.
+
 ## Features
 
 - `120 x 80` title thumbnails for `IMGS`
@@ -19,7 +23,7 @@ The Custom Art index supports up to 256 entries in each `CUSTOM` folder because 
 ## Download and History
 
 - [Download the latest DS Style Thumbnail Scraper release](https://github.com/FrankieT19/ds-style-thumbnail-scraper/releases/latest)
-- [Read the complete Thumbnail Scraper changelog](CHANGELOG.md)
+- [Changelog](CHANGELOG.md)
 
 ## Setup
 
@@ -42,7 +46,7 @@ python -m venv .venv
 
 ## User Guide
 
-Read the complete [DS Style User Guide](https://frankiet19.github.io/omega-de-ds-style-kernel/) for artwork setup, custom thumbnails, installation, and troubleshooting.
+Read the [DS Style User Guide](https://frankiet19.github.io/omega-de-ds-style-kernel/) for artwork setup, custom thumbnails, installation, and troubleshooting.
 
 ## Related Repositories
 
