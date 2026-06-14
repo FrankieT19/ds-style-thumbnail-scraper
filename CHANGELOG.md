@@ -2,10 +2,24 @@
 
 ## v1.4
 
-- Improved high-DPI and small-desktop window sizing.
+- Improved scaling and window sizing on high-resolution displays and smaller desktops.
 - Kept the Custom Art build command visible when vertical space is limited.
 
 ## v1.3
 
-- Added custom thumbnail support for folders and all files. Improved kernel integration.
-- Updated DS Style compatibility text through v6.9.
+- Added custom thumbnail support for folders and all files.
+- Removed the need to edit ROM headers when assigning custom artwork.
+- Improved DS Style kernel integration.
+
+## v1.2
+
+- Improved the artwork search algorithm.
+- Added general optimisations.
+
+## v1.1
+
+- Improved homebrew artwork handling.
+
+## v1.0
+
+- Initial release.

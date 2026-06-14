@@ -16,6 +16,11 @@ It builds both supported thumbnail formats from Libretro or a local artwork pack
 
 The Custom Art index supports up to 256 entries in each `CUSTOM` folder because of the cartridge's RAM limits.
 
+## Download and History
+
+- [Download the latest DS Style Thumbnail Scraper release](https://github.com/FrankieT19/ds-style-thumbnail-scraper/releases/latest)
+- [Read the complete Thumbnail Scraper changelog](CHANGELOG.md)
+
 ## Setup
 
 ```powershell
