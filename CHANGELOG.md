@@ -4,6 +4,7 @@
 
 - Improved scaling and window sizing on high-resolution displays and smaller desktops.
 - Kept the Custom Art build command visible when vertical space is limited.
+- Updated compatibility information for DS Style v7.2.
 
 ## v1.3
 
