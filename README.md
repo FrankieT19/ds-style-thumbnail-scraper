@@ -8,7 +8,7 @@ It builds both supported thumbnail formats from Libretro or a local artwork pack
 
 Visit the [DS Style homepage](https://frankiet19.github.io/omega-de-ds-style-kernel/project/) for an overview, kernel downloads, tools and example themes.
 
-The [DS Style Manager (Beta)](https://frankiet19.github.io/omega-de-ds-style-kernel/manager/) provides complementary browser-based SD-card, artwork, style and project tools while the web workflow is developed.
+The [DS Style Manager (Beta)](https://frankiet19.github.io/omega-de-ds-style-kernel/manager/) provides guided browser installation, a few starting preferences, artwork creation and installed-style management. Full artwork-pack building remains in this desktop Scraper.
 
 ## Features
 
