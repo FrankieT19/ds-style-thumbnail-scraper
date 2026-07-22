@@ -2,7 +2,7 @@
 
 DS Style Thumbnail Scraper is a Windows desktop application for creating artwork packs for the **DS Style** custom kernel on the EZ-FLASH OMEGA and OMEGA Definitive Edition.
 
-It builds both supported thumbnail formats from Libretro or a local artwork pack, and can create exact-name custom artwork for any file or folder.
+It builds complete Game Boy Advance thumbnail packs from Libretro or a local artwork pack, and creates exact-name CUSTOM artwork for other systems supported by DS Style and Simple.
 
 ## DS Style Homepage
 
@@ -15,12 +15,16 @@ The [DS Style Manager (Beta)](https://frankiet19.github.io/omega-de-ds-style-ker
 - `120 x 80` title thumbnails for `IMGS`
 - `80 x 80` box thumbnails for `IMGS2`
 - Libretro and local artwork-pack sources
+- System-aware Libretro search for supported consoles
+- SD library scanning that finds artwork only for installed games
 - Region and artwork selection
 - Preview, crop, zoom, and per-entry adjustments
 - Exact-name custom artwork for files and folders
 - EZ-FLASH-compatible 15-bit BMP output
 
 The Custom Art index supports up to 256 entries in each `CUSTOM` folder because of the cartridge's RAM limits.
+
+Complete pack building remains focused on Game Boy Advance. Artwork for other systems is written to `IMGS/CUSTOM` and `IMGS2/CUSTOM`, keeping the result limited to games that are actually on the SD card.
 
 ## Download and History
 

@@ -1,4 +1,4 @@
-DS STYLE THUMBNAIL SCRAPER
+DS STYLE THUMBNAIL SCRAPER v1.5
 
 For DS Style v7.2 or newer.
 
@@ -10,5 +10,9 @@ GETTING STARTED
 Run DS Style Thumbnail Scraper.exe.
 
 Finished artwork is saved in a dated folder inside DS Style Thumbnail Scraper output, beside the program.
+
+Build complete Game Boy Advance packs from Libretro or a local artwork pack. For other supported systems, choose the console when searching or use Scan SD Card on the Custom Art tab to find artwork only for games already on your card.
+
+Scanned artwork is added to IMGS/CUSTOM and IMGS2/CUSTOM. Each CUSTOM folder supports up to 256 images.
 
 The scraper does not download games or modify ROM files.

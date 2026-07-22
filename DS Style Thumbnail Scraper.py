@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -36,6 +37,7 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Thumbnail Scraper"
+APP_VERSION = "1.5"
 OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper output"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
 CONFIG_NAME = "thumbnail_scraper_settings.json"
@@ -60,20 +62,58 @@ BUILD_PREVIEW_SAMPLES = {
 GBA_IGDB_PLATFORM_ID = 24
 GBA_SCREENSCRAPER_SYSTEM_ID = 12
 PROVIDER_VALUES = ["Libretro", "Local Pack"]
-LIBRETRO_API_TREE = (
-    "https://api.github.com/repos/libretro-thumbnails/"
-    "Nintendo_-_Game_Boy_Advance/git/trees/master?recursive=1"
-)
-LIBRETRO_RAW_BY_FOLDER = (
-    "https://raw.githubusercontent.com/libretro-thumbnails/"
-    "Nintendo_-_Game_Boy_Advance/master/{folder}/{name}"
-)
+DEFAULT_SYSTEM = "Game Boy Advance"
+LIBRETRO_SYSTEMS = {
+    "Game Boy Advance": {
+        "repo": "Nintendo_-_Game_Boy_Advance",
+        "extensions": (".gba", ".agb", ".bin", ".mb"),
+    },
+    "Game Boy": {"repo": "Nintendo_-_Game_Boy", "extensions": (".gb",)},
+    "Game Boy Color": {"repo": "Nintendo_-_Game_Boy_Color", "extensions": (".gbc",)},
+    "Nintendo Entertainment System": {
+        "repo": "Nintendo_-_Nintendo_Entertainment_System",
+        "extensions": (".nes",),
+    },
+    "Master System": {"repo": "Sega_-_Master_System_-_Mark_III", "extensions": (".sms",)},
+    "Game Gear": {"repo": "Sega_-_Game_Gear", "extensions": (".gg",)},
+    "SG-1000": {"repo": "Sega_-_SG-1000", "extensions": (".sg",)},
+    "PC Engine": {"repo": "NEC_-_PC_Engine_-_TurboGrafx_16", "extensions": (".pce",)},
+    "Neo Geo Pocket": {"repo": "SNK_-_Neo_Geo_Pocket", "extensions": (".ngp", ".ngc")},
+    "Neo Geo Pocket Color": {"repo": "SNK_-_Neo_Geo_Pocket_Color", "extensions": (".ngpc",)},
+    "WonderSwan": {"repo": "Bandai_-_WonderSwan", "extensions": (".ws",)},
+    "WonderSwan Color": {"repo": "Bandai_-_WonderSwan_Color", "extensions": (".wsc",)},
+    "MSX": {"repo": "Microsoft_-_MSX", "extensions": (".rom",)},
+    "Watara Supervision": {"repo": "Watara_-_Supervision", "extensions": (".sv",)},
+    "ZX Spectrum": {"repo": "Sinclair_-_ZX_Spectrum", "extensions": (".z80",)},
+    "ColecoVision": {"repo": "Coleco_-_ColecoVision", "extensions": (".col",)},
+    "Arcadia 2001": {"repo": "Emerson_-_Arcadia_2001", "extensions": (".arc",)},
+    "Super Cassette Vision": {"repo": "Epoch_-_Super_Cassette_Vision", "extensions": (".sc",)},
+}
+SYSTEM_BY_EXTENSION = {
+    extension: system
+    for system, details in LIBRETRO_SYSTEMS.items()
+    for extension in details["extensions"]
+}
+SCAN_EXCLUDED_FOLDERS = {
+    "$recycle.bin",
+    "system volume information",
+    "system",
+    "saver",
+    "rts",
+    "cheat",
+    "patch",
+    "imgs",
+    "imgs2",
+    "backup",
+    "themes",
+    "kernels",
+}
 LIBRETRO_SOURCE_FOLDERS = {
     "Box Art": "Named_Boxarts",
     "Gameplay Screenshot": "Named_Snaps",
     "Title Screen": "Named_Titles",
 }
-LIBRETRO_SOURCE_CACHE_FILES = {
+GBA_SOURCE_CACHE_FILES = {
     "Named_Boxarts": "libretro_gba_boxarts.json",
     "Named_Snaps": "libretro_gba_snaps.json",
     "Named_Titles": "libretro_gba_titles.json",
@@ -83,14 +123,34 @@ GBA_CODE_OFFSET = 0xAC
 GBA_HEADER_CHECKSUM_OFFSET = 0xBD
 GBA_HEADER_MIN_SIZE = 0xC0
 WEB_HEADERS = {
-    "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) {APP_NAME}/1.4",
+    "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) {APP_NAME}/{APP_VERSION}",
     "Accept": "application/json,text/plain,*/*",
     "Accept-Language": "en-US,en;q=0.9",
 }
 
 
-def libretro_source_cache_path(base_dir: Path, folder: str) -> Path:
-    filename = LIBRETRO_SOURCE_CACHE_FILES.get(folder, f"libretro_gba_{folder.lower()}.json")
+def libretro_repo(system: str) -> str:
+    return LIBRETRO_SYSTEMS.get(system, LIBRETRO_SYSTEMS[DEFAULT_SYSTEM])["repo"]
+
+
+def libretro_tree_url(system: str) -> str:
+    return f"https://api.github.com/repos/libretro-thumbnails/{libretro_repo(system)}/git/trees/master?recursive=1"
+
+
+def libretro_raw_url(system: str, folder: str, name: str) -> str:
+    encoded_name = urllib.parse.quote(name)
+    return (
+        "https://raw.githubusercontent.com/libretro-thumbnails/"
+        f"{libretro_repo(system)}/master/{folder}/{encoded_name}"
+    )
+
+
+def libretro_source_cache_path(base_dir: Path, folder: str, system: str = DEFAULT_SYSTEM) -> Path:
+    if system == DEFAULT_SYSTEM and folder in GBA_SOURCE_CACHE_FILES:
+        return base_dir / CACHE_FOLDER_NAME / GBA_SOURCE_CACHE_FILES[folder]
+    repo = re.sub(r"[^a-z0-9]+", "_", libretro_repo(system).lower()).strip("_")
+    source = re.sub(r"[^a-z0-9]+", "_", folder.lower()).strip("_")
+    filename = f"libretro_{repo}_{source}.json"
     return base_dir / CACHE_FOLDER_NAME / filename
 
 
@@ -191,12 +251,17 @@ def provider_key(provider: str) -> str:
     return provider
 
 
-def load_libretro_source_index(cache_path: Path, folder: str, refresh: bool = False) -> list[str]:
+def load_libretro_source_index(
+    cache_path: Path,
+    folder: str,
+    system: str = DEFAULT_SYSTEM,
+    refresh: bool = False,
+) -> list[str]:
     if cache_path.exists() and not refresh:
         cached_names = json.loads(cache_path.read_text(encoding="utf-8"))
-        if len(cached_names) > 1000:
+        if isinstance(cached_names, list) and cached_names:
             return cached_names
-    data = json.loads(http_get(LIBRETRO_API_TREE).decode("utf-8"))
+    data = json.loads(http_get(libretro_tree_url(system)).decode("utf-8"))
     prefix = f"{folder}/"
     names = sorted(
         Path(item["path"]).name
@@ -248,6 +313,7 @@ class ProviderResult:
     provider: str
     label: str
     image_data: bytes
+    system: str = DEFAULT_SYSTEM
 
 
 @dataclass
@@ -271,6 +337,7 @@ class CustomRomItem:
     image_path: str = ""
     size: str = "80x80"
     crop: dict | None = None
+    system: str = ""
 
 
 def validate_custom_art_name(value: str) -> str:
@@ -290,23 +357,50 @@ def output_path_for_custom_name(output_root: Path, name: str) -> Path:
     return output_root / "CUSTOM" / f"{validate_custom_art_name(name)}.bmp"
 
 
+def display_libretro_name(name: str) -> str:
+    return Path(name).stem.replace("_", " ")
+
+
+def system_for_path(path: Path) -> str | None:
+    return SYSTEM_BY_EXTENSION.get(path.suffix.casefold())
+
+
 class Providers:
     def __init__(self, app: "ThumbnailScraperApp"):
         self.app = app
-        self.libretro_indexes: dict[str, list[str]] = {}
-        self.libretro_direct_indexes: dict[str, tuple[dict[str, str], list[str]]] = {}
+        self.libretro_indexes: dict[tuple[str, str], list[str]] = {}
+        self.libretro_direct_indexes: dict[tuple, tuple[dict[str, str], list[str]]] = {}
         self.local_art_index = None
 
-    def search(self, provider: str, query: str, libretro_source: str | None = None) -> ProviderResult:
-        results = self.search_many(provider, query, max_results=1, libretro_source=libretro_source)
+    def search(
+        self,
+        provider: str,
+        query: str,
+        libretro_source: str | None = None,
+        system: str = DEFAULT_SYSTEM,
+    ) -> ProviderResult:
+        results = self.search_many(
+            provider,
+            query,
+            max_results=1,
+            libretro_source=libretro_source,
+            system=system,
+        )
         if not results:
             raise LookupError("No artwork found.")
         return results[0]
 
-    def search_many(self, provider: str, query: str, max_results: int | None = 20, libretro_source: str | None = None) -> list[ProviderResult]:
+    def search_many(
+        self,
+        provider: str,
+        query: str,
+        max_results: int | None = 20,
+        libretro_source: str | None = None,
+        system: str = DEFAULT_SYSTEM,
+    ) -> list[ProviderResult]:
         provider = provider_key(provider)
         if provider == "Libretro":
-            return self.search_libretro_many(query, max_results, libretro_source)
+            return self.search_libretro_many(query, max_results, libretro_source, system)
         if provider == "Local Pack":
             return self.search_local_pack_many(query, max_results)
         if provider == "IGDB":
@@ -317,19 +411,66 @@ class Providers:
             return self.search_screenscraper_many(query, max_results)
         raise ValueError(f"Unknown provider: {provider}")
 
-    def search_libretro_many(self, query: str, max_results: int | None = 20, libretro_source: str | None = None) -> list[ProviderResult]:
+    def get_libretro_index(self, system: str, folder: str) -> list[str]:
+        key = (system, folder)
+        if key not in self.libretro_indexes:
+            cache = libretro_source_cache_path(self.app.base_dir, folder, system)
+            self.libretro_indexes[key] = load_libretro_source_index(cache, folder, system)
+        return self.libretro_indexes[key]
+
+    def libretro_match_index(self, system: str, folder: str) -> tuple[dict[str, str], list[str]]:
+        cache_key = (system, folder, tuple(self.app.ordered_regions()))
+        if cache_key not in self.libretro_direct_indexes:
+            use_region_filter = system == DEFAULT_SYSTEM
+            allowed_index = sorted(
+                [
+                    name
+                    for name in self.get_libretro_index(system, folder)
+                    if not use_region_filter or self.app.region_allowed(name)
+                ],
+                key=lambda name: (self.app.region_priority(name) if use_region_filter else 0, name),
+            )
+            exact_index: dict[str, str] = {}
+            for name in allowed_index:
+                exact_index.setdefault(normalize_for_match(name), name)
+            self.libretro_direct_indexes[cache_key] = (exact_index, allowed_index)
+        return self.libretro_direct_indexes[cache_key]
+
+    def find_libretro_art_name(self, query: str, system: str, folder: str) -> str | None:
+        # SD scanning follows the files that are actually installed. Pack-region
+        # preferences must not hide a World, Japan, or other regional ROM here.
+        allowed_index = sorted(self.get_libretro_index(system, folder))
+        literal_index = {Path(name).stem.casefold(): name for name in allowed_index}
+        exact_index: dict[str, str] = {}
+        for name in allowed_index:
+            exact_index.setdefault(normalize_for_match(name), name)
+        exact = literal_index.get(Path(query).stem.casefold())
+        if not exact:
+            exact = exact_index.get(normalize_for_match(query))
+        if exact:
+            return exact
+        extension = LIBRETRO_SYSTEMS.get(system, LIBRETRO_SYSTEMS[DEFAULT_SYSTEM])["extensions"][0]
+        candidate = type(
+            "ScannedRom",
+            (),
+            {"path": Path(f"{query}{extension}"), "title": query, "code": "----"},
+        )()
+        return find_boxart_name(candidate, allowed_index)
+
+    def search_libretro_many(
+        self,
+        query: str,
+        max_results: int | None = 20,
+        libretro_source: str | None = None,
+        system: str = DEFAULT_SYSTEM,
+    ) -> list[ProviderResult]:
         folder = LIBRETRO_SOURCE_FOLDERS.get(libretro_source or self.app.preview_libretro_source_var.get(), "Named_Boxarts")
-        if folder not in self.libretro_indexes:
-            cache = libretro_source_cache_path(self.app.base_dir, folder)
-            self.libretro_indexes[folder] = load_libretro_source_index(cache, folder)
-        libretro_index = self.libretro_indexes[folder]
-        search_queries = self.libretro_search_queries(query)
-        query_content = content_tokens(query)
+        libretro_index = self.get_libretro_index(system, folder)
+        search_queries = self.libretro_search_queries(query) if system == DEFAULT_SYSTEM else [query]
         scored = []
         for name in libretro_index:
-            if not self.app.region_allowed(name):
+            if system == DEFAULT_SYSTEM and not self.app.region_allowed(name):
                 continue
-            name_content = content_tokens(name)
             score = title_match_score(query, name)
             include = score >= 2.2 and title_search_compatible(query, name)
             normalized_name = normalize_for_match(name)
@@ -348,14 +489,29 @@ class Providers:
                     include = True
             if include:
                 scored.append((score, name))
-        scored.sort(key=lambda item: (self.app.region_priority(item[1]), -item[0], variant_rank(item[1]), item[1]))
+        scored.sort(
+            key=lambda item: (
+                -item[0],
+                self.app.region_priority(item[1]) if system == DEFAULT_SYSTEM else 0,
+                variant_rank(item[1]),
+                item[1],
+            )
+        )
         if not scored:
             allowed_index = sorted(
-                [name for name in libretro_index if self.app.region_allowed(name)],
-                key=lambda name: (self.app.region_priority(name), name),
+                [
+                    name
+                    for name in libretro_index
+                    if system != DEFAULT_SYSTEM or self.app.region_allowed(name)
+                ],
+                key=lambda name: (
+                    self.app.region_priority(name) if system == DEFAULT_SYSTEM else 0,
+                    name,
+                ),
             )
             for search_query in search_queries:
-                fake = type("FakeRom", (), {"path": Path(f"{search_query}.gba"), "title": search_query, "code": "----"})()
+                extension = LIBRETRO_SYSTEMS.get(system, LIBRETRO_SYSTEMS[DEFAULT_SYSTEM])["extensions"][0]
+                fake = type("FakeRom", (), {"path": Path(f"{search_query}{extension}"), "title": search_query, "code": "----"})()
                 art_name = find_boxart_name(fake, allowed_index)
                 if art_name:
                     scored = [(99, art_name)]
@@ -369,7 +525,7 @@ class Providers:
                 future_to_name = {
                     executor.submit(
                         http_get,
-                        LIBRETRO_RAW_BY_FOLDER.format(folder=folder, name=urllib.parse.quote(art_name)),
+                        libretro_raw_url(system, folder, art_name),
                     ): art_name
                     for art_name in art_names
                 }
@@ -381,40 +537,21 @@ class Providers:
                         continue
             for art_name in art_names:
                 if art_name in fetched:
-                    results.append(ProviderResult("Libretro", art_name, fetched[art_name]))
+                    results.append(ProviderResult("Libretro", art_name, fetched[art_name], system))
         else:
             for art_name in art_names:
-                url_name = urllib.parse.quote(art_name)
-                url = LIBRETRO_RAW_BY_FOLDER.format(folder=folder, name=url_name)
-                results.append(ProviderResult("Libretro", art_name, http_get(url)))
+                results.append(ProviderResult("Libretro", art_name, http_get(libretro_raw_url(system, folder, art_name)), system))
         if not results:
-            raise LookupError("No Libretro box art match found.")
+            raise LookupError(f"No Libretro artwork match found for {system}.")
         return results
 
     def direct_libretro_result(self, entry, libretro_source: str) -> ProviderResult:
         folder, art_name = self.direct_libretro_art_name(entry, libretro_source)
-        url_name = urllib.parse.quote(art_name)
-        url = LIBRETRO_RAW_BY_FOLDER.format(folder=folder, name=url_name)
-        return ProviderResult("Libretro", art_name, http_get(url))
+        return ProviderResult("Libretro", art_name, http_get(libretro_raw_url(DEFAULT_SYSTEM, folder, art_name)))
 
     def direct_libretro_art_map(self, libretro_source: str) -> dict[str, tuple[str, str]]:
         folder = LIBRETRO_SOURCE_FOLDERS.get(libretro_source, "Named_Boxarts")
-        if folder not in self.libretro_indexes:
-            cache = libretro_source_cache_path(self.app.base_dir, folder)
-            self.libretro_indexes[folder] = load_libretro_source_index(cache, folder)
-
-        cache_key = f"{folder}|{'|'.join(self.app.ordered_regions())}"
-        if cache_key not in self.libretro_direct_indexes:
-            allowed_index = sorted(
-                [name for name in self.libretro_indexes[folder] if self.app.region_allowed(name)],
-                key=lambda name: (self.app.region_priority(name), name),
-            )
-            exact_index = {}
-            for name in allowed_index:
-                exact_index.setdefault(normalize_for_match(name), name)
-            self.libretro_direct_indexes[cache_key] = (exact_index, allowed_index)
-
-        exact_index, _allowed_index = self.libretro_direct_indexes[cache_key]
+        exact_index, _allowed_index = self.libretro_match_index(DEFAULT_SYSTEM, folder)
         art_by_code_root: dict[str, tuple[str, str]] = {}
         for entry in sorted(self.app.get_game_library(), key=lambda item: (self.app.region_priority(item.title), item.title)):
             if not entry.code or not self.app.region_allowed(entry.title):
@@ -428,22 +565,7 @@ class Providers:
 
     def direct_libretro_art_name(self, entry, libretro_source: str) -> tuple[str, str]:
         folder = LIBRETRO_SOURCE_FOLDERS.get(libretro_source, "Named_Boxarts")
-        if folder not in self.libretro_indexes:
-            cache = libretro_source_cache_path(self.app.base_dir, folder)
-            self.libretro_indexes[folder] = load_libretro_source_index(cache, folder)
-
-        cache_key = f"{folder}|{'|'.join(self.app.ordered_regions())}"
-        if cache_key not in self.libretro_direct_indexes:
-            allowed_index = sorted(
-                [name for name in self.libretro_indexes[folder] if self.app.region_allowed(name)],
-                key=lambda name: (self.app.region_priority(name), name),
-            )
-            exact_index = {}
-            for name in allowed_index:
-                exact_index.setdefault(normalize_for_match(name), name)
-            self.libretro_direct_indexes[cache_key] = (exact_index, allowed_index)
-
-        exact_index, allowed_index = self.libretro_direct_indexes[cache_key]
+        exact_index, allowed_index = self.libretro_match_index(DEFAULT_SYSTEM, folder)
         art_name = exact_index.get(normalize_for_match(entry.path.name))
         if not art_name:
             art_name = exact_index.get(normalize_for_match(entry.title))
@@ -693,6 +815,7 @@ class ThumbnailScraperApp(tk.Tk):
         self.build_preview_photo = None
         self.result_thumbs = []
         self.game_names: list[str] = []
+        self.system_game_names: dict[str, list[str]] = {}
         self.game_library = []
         self.known_game_codes: set[str] = set()
         self.suggestion_box: tk.Listbox | None = None
@@ -703,11 +826,13 @@ class ThumbnailScraperApp(tk.Tk):
         self.running = False
         self.cancel_build_requested = False
         self.loading_custom_crop = False
+        self.scan_running = False
 
         self.build_provider_var = tk.StringVar(value="Libretro")
         self.preview_provider_var = tk.StringVar(value="Libretro")
         self.build_libretro_source_var = tk.StringVar(value="Box Art")
         self.preview_libretro_source_var = tk.StringVar(value="Box Art")
+        self.preview_system_var = tk.StringVar(value=DEFAULT_SYSTEM)
         self.size_var = tk.StringVar(value="80x80")
         self.search_var = tk.StringVar(value=DEFAULT_SEARCH)
         self.result_choice_var = tk.StringVar()
@@ -932,13 +1057,14 @@ class ThumbnailScraperApp(tk.Tk):
         title_box = ttk.Frame(header, style="TFrame")
         title_box.pack(side="left", fill="x", expand=True)
         ttk.Label(title_box, text=APP_NAME, style="Title.TLabel").pack(anchor="w")
-        ttk.Label(title_box, text="Build EZ Flash Omega DE thumbnail packs from online or local artwork.", style="Sub.TLabel").pack(anchor="w", pady=(3, 0))
+        ttk.Label(title_box, text="Build DS Style thumbnail artwork from online or local images.", style="Sub.TLabel").pack(anchor="w", pady=(3, 0))
         version_box = ttk.Frame(header, style="TFrame")
         version_box.pack(side="right", anchor="n")
-        ttk.Label(version_box, text="DS Style Thumbnail Scraper v1.4", style="HeaderVersion.TLabel").pack(anchor="e")
+        ttk.Label(version_box, text=f"DS Style Thumbnail Scraper v{APP_VERSION}", style="HeaderVersion.TLabel").pack(anchor="e")
         ttk.Label(version_box, text="For DS Style v7.2", style="HeaderVersion.TLabel").pack(anchor="e", pady=(4, 0))
 
         notebook = ttk.Notebook(self)
+        self.notebook = notebook
         notebook.pack(fill="both", expand=True, padx=18, pady=(0, 12))
         self.build_tab = ttk.Frame(notebook, style="Panel.TFrame", padding=14)
         self.preview_tab = ttk.Frame(notebook, style="Panel.TFrame", padding=14)
@@ -1066,6 +1192,16 @@ class ThumbnailScraperApp(tk.Tk):
         preview_provider_combo = ttk.Combobox(controls, textvariable=self.preview_provider_var, values=PROVIDER_VALUES, state="readonly", width=24)
         preview_provider_combo.pack(anchor="w")
         preview_provider_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_preview_source_change())
+        ttk.Label(controls, text="System / console").pack(anchor="w", pady=(12, 4))
+        self.preview_system_combo = ttk.Combobox(
+            controls,
+            textvariable=self.preview_system_var,
+            values=list(LIBRETRO_SYSTEMS),
+            state="readonly",
+            width=24,
+        )
+        self.preview_system_combo.pack(anchor="w")
+        self.preview_system_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_preview_system_change())
         ttk.Label(controls, text="Libretro source").pack(anchor="w", pady=(12, 4))
         preview_source_combo = ttk.Combobox(controls, textvariable=self.preview_libretro_source_var, values=list(LIBRETRO_SOURCE_FOLDERS), state="readonly", width=24)
         preview_source_combo.pack(anchor="w")
@@ -1100,7 +1236,10 @@ class ThumbnailScraperApp(tk.Tk):
         self.search_button.pack(anchor="w")
         ttk.Label(controls, text="Artwork").pack(anchor="w", pady=(12, 4))
         ttk.Button(controls, text="Use Local Image...", command=self.choose_preview_local).pack(anchor="w", pady=(8, 0))
-        ttk.Button(controls, text="Add As Exception", command=self.add_exception).pack(anchor="w", pady=(8, 0))
+        self.add_to_custom_button = ttk.Button(controls, text="Add To Custom Art", command=self.add_preview_to_custom)
+        self.add_to_custom_button.pack(anchor="w", pady=(8, 0))
+        self.add_exception_button = ttk.Button(controls, text="Add As GBA Exception", command=self.add_exception)
+        self.add_exception_button.pack(anchor="w", pady=(8, 0))
 
         preview = ttk.Frame(self.preview_tab, style="Panel.TFrame")
         preview.grid(row=0, column=1, sticky="nsew", padx=(0, 20))
@@ -1148,7 +1287,7 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Label(self.custom_tab, text="Custom Thumbnail Overrides", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(
             self.custom_tab,
-            text="Add artwork for ROM hacks, homebrew, folders, translations, or games missing from the normal lookup. ROM files are not edited.",
+            text="Add artwork for any supported game file or folder. Scan an SD card to match installed games automatically; ROM files are never edited.",
             style="Muted.TLabel",
             wraplength=760,
         ).grid(row=1, column=0, sticky="w", pady=(8, 14))
@@ -1165,7 +1304,7 @@ class ThumbnailScraperApp(tk.Tk):
         list_area.rowconfigure(0, weight=1)
         list_area.columnconfigure(0, weight=1)
         self.custom_tree = ttk.Treeview(list_area, columns=("name", "source", "size", "image"), show="headings", height=11, selectmode="extended")
-        for column, text, width in (("name", "Thumbnail name", 230), ("source", "Source", 120), ("size", "Size", 76), ("image", "Image", 170)):
+        for column, text, width in (("name", "Thumbnail name", 230), ("source", "System", 120), ("size", "Size", 76), ("image", "Image", 170)):
             self.custom_tree.heading(column, text=text)
             self.custom_tree.column(column, width=width, stretch=True)
         custom_ybar = ttk.Scrollbar(list_area, orient="vertical", command=self.custom_tree.yview)
@@ -1184,6 +1323,8 @@ class ThumbnailScraperApp(tk.Tk):
 
         actions = ttk.Frame(body, style="Panel.TFrame")
         actions.grid(row=0, column=1, sticky="n", padx=(0, 24))
+        self.scan_sd_button = ttk.Button(actions, text="Scan SD Card...", style="Accent.TButton", command=self.scan_sd_card)
+        self.scan_sd_button.pack(anchor="w", fill="x", pady=(0, 12))
         ttk.Button(actions, text="Add File...", command=self.add_custom_roms).pack(anchor="w", fill="x", pady=(0, 8))
         ttk.Button(actions, text="Enter Name...", command=self.add_custom_name).pack(anchor="w", fill="x", pady=(0, 8))
         ttk.Button(actions, text="Set Image...", command=self.set_custom_image).pack(anchor="w", fill="x", pady=(0, 8))
@@ -1388,6 +1529,17 @@ class ThumbnailScraperApp(tk.Tk):
     def on_preview_source_change(self):
         self.save_settings()
         self.hide_suggestions()
+        self._load_system_names_async(self.preview_system_var.get())
+        if self.search_var.get().strip():
+            self.preview_search()
+
+    def on_preview_system_change(self):
+        self.save_settings()
+        self.hide_suggestions()
+        self._load_system_names_async(self.preview_system_var.get())
+        if hasattr(self, "add_exception_button"):
+            state = "normal" if self.preview_system_var.get() == DEFAULT_SYSTEM else "disabled"
+            self.add_exception_button.configure(state=state)
         if self.search_var.get().strip():
             self.preview_search()
 
@@ -1423,6 +1575,21 @@ class ThumbnailScraperApp(tk.Tk):
         self.game_names = names
         self.known_game_codes = codes
 
+    def _load_system_names_async(self, system: str):
+        if system == DEFAULT_SYSTEM or system in self.system_game_names:
+            return
+        folder = LIBRETRO_SOURCE_FOLDERS.get(self.preview_libretro_source_var.get(), "Named_Boxarts")
+
+        def worker():
+            try:
+                index = self.providers.get_libretro_index(system, folder)
+                names = sorted({display_libretro_name(name) for name in index}, key=str.casefold)
+                self.after(0, lambda: self.system_game_names.setdefault(system, names))
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def get_game_library(self):
         if not self.game_library:
             cache = self.base_dir / CACHE_FOLDER_NAME / "libretro_nointro_gba_library.json"
@@ -1437,10 +1604,12 @@ class ThumbnailScraperApp(tk.Tk):
         if not self.suggestion_box:
             return
         query = self.search_var.get().strip().lower()
-        if len(query) < 2 or not self.game_names:
+        system = self.preview_system_var.get()
+        names = self.game_names if system == DEFAULT_SYSTEM else self.system_game_names.get(system, [])
+        if len(query) < 2 or not names:
             self.hide_suggestions()
             return
-        matches = [name for name in self.game_names if query in name.lower() and self.region_allowed(name)][:8]
+        matches = [name for name in names if query in name.lower() and self.region_allowed(name)][:8]
         self.suggestion_box.delete(0, "end")
         for name in matches:
             self.suggestion_box.insert("end", name)
@@ -1511,6 +1680,7 @@ class ThumbnailScraperApp(tk.Tk):
                     self.search_var.get(),
                     max_results=PREVIEW_RESULT_LIMIT,
                     libretro_source=self.preview_libretro_source_var.get(),
+                    system=self.preview_system_var.get(),
                 )
                 self.result_options = results
                 result = results[0]
@@ -1602,11 +1772,350 @@ class ThumbnailScraperApp(tk.Tk):
         if not path:
             return
         data = Path(path).read_bytes()
-        self.current_result = ProviderResult("Local Image", Path(path).name, data)
+        self.current_result = ProviderResult("Local Image", Path(path).name, data, self.preview_system_var.get())
         self.current_local_path = path
         self.result_options = [self.current_result]
         self.current_source_image = Image.open(path)
         self.refresh_result_gallery()
+
+    def cache_provider_result(self, result: ProviderResult, source: str = "manual") -> str:
+        digest = hashlib.sha256(
+            f"{result.system}|{source}|{result.label}".encode("utf-8") + result.image_data
+        ).hexdigest()[:24]
+        cache_dir = self.base_dir / CACHE_FOLDER_NAME / "matched artwork"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        path = cache_dir / f"{digest}.png"
+        if not path.exists():
+            with Image.open(io.BytesIO(result.image_data)) as image:
+                image.convert("RGBA").save(path, "PNG")
+        return str(path)
+
+    def add_preview_to_custom(self):
+        if not self.current_result:
+            messagebox.showinfo(APP_NAME, "Fetch or choose an image first.")
+            return
+        dialog = tk.Toplevel(self)
+        dialog.title("Add To Custom Art")
+        dialog.configure(bg="#152235")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        ttk.Label(dialog, text="Exact filename without its extension").grid(row=0, column=0, sticky="w", padx=16, pady=(16, 6))
+        initial_name = Path(self.search_var.get().strip()).stem or display_libretro_name(self.current_result.label)
+        name_var = tk.StringVar(value=initial_name)
+        entry = ttk.Entry(dialog, textvariable=name_var, width=42)
+        entry.grid(row=1, column=0, sticky="ew", padx=16)
+        ttk.Label(
+            dialog,
+            text="The artwork name must exactly match the file on the SD card.",
+            style="Muted.TLabel",
+        ).grid(row=2, column=0, sticky="w", padx=16, pady=(6, 12))
+        buttons = ttk.Frame(dialog, style="Panel.TFrame")
+        buttons.grid(row=3, column=0, sticky="e", padx=16, pady=(0, 16))
+
+        def add():
+            try:
+                name = validate_custom_art_name(name_var.get())
+                selected_size = self.size_var.get()
+                key = (name.casefold(), selected_size)
+                if key in {(item.new_code.casefold(), item.size) for item in self.custom_roms}:
+                    raise ValueError("That custom name and size is already in the list.")
+                image_path = self.cache_provider_result(
+                    self.current_result,
+                    self.preview_libretro_source_var.get(),
+                )
+            except (OSError, ValueError) as exc:
+                messagebox.showwarning(APP_NAME, str(exc), parent=dialog)
+                return
+            self.custom_roms.append(
+                CustomRomItem(
+                    "",
+                    name,
+                    "----",
+                    name,
+                    image_path=image_path,
+                    size=selected_size,
+                    system=self.preview_system_var.get(),
+                )
+            )
+            self.refresh_custom_roms([len(self.custom_roms) - 1])
+            self.save_settings()
+            self.notebook.select(self.custom_tab)
+            self.status_var.set(f"Added {name} to Custom Art.")
+            dialog.destroy()
+
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side="right", padx=(8, 0))
+        ttk.Button(buttons, text="Add", style="Accent.TButton", command=add).pack(side="right")
+        entry.bind("<Return>", lambda _event: add())
+        entry.focus_set()
+
+    def scan_sd_card(self):
+        if self.scan_running:
+            return
+        selected = filedialog.askdirectory(title="Choose the root of the SD card")
+        if not selected:
+            return
+        root = Path(selected)
+        dialog = tk.Toplevel(self)
+        dialog.title("Scan SD Card")
+        dialog.configure(bg="#152235")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        dialog.columnconfigure(0, weight=1)
+        ttk.Label(dialog, text="Find artwork for installed games", style="Section.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=18, pady=(18, 6)
+        )
+        ttk.Label(
+            dialog,
+            text=f"Scanning: {root}",
+            style="Muted.TLabel",
+            wraplength=480,
+        ).grid(row=1, column=0, columnspan=2, sticky="w", padx=18, pady=(0, 14))
+        ttk.Label(dialog, text="Artwork type").grid(row=2, column=0, sticky="w", padx=(18, 8), pady=5)
+        source_var = tk.StringVar(value="Box Art")
+        ttk.Combobox(
+            dialog,
+            textvariable=source_var,
+            values=list(LIBRETRO_SOURCE_FOLDERS),
+            state="readonly",
+            width=24,
+        ).grid(row=2, column=1, sticky="ew", padx=(8, 18), pady=5)
+        ttk.Label(dialog, text="Create").grid(row=3, column=0, sticky="w", padx=(18, 8), pady=5)
+        sizes_var = tk.StringVar(value="Wide and square")
+        ttk.Combobox(
+            dialog,
+            textvariable=sizes_var,
+            values=["Wide and square", "Wide, 120x80", "Square, 80x80"],
+            state="readonly",
+            width=24,
+        ).grid(row=3, column=1, sticky="ew", padx=(8, 18), pady=5)
+        include_gba_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            dialog,
+            text="Include Game Boy Advance files",
+            variable=include_gba_var,
+        ).grid(row=4, column=0, columnspan=2, sticky="w", padx=18, pady=(10, 2))
+        ttk.Label(
+            dialog,
+            text="GBA artwork is normally supplied by a standard thumbnail pack. Other supported systems use CUSTOM artwork.",
+            style="Muted.TLabel",
+            wraplength=480,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=18, pady=(0, 14))
+        buttons = ttk.Frame(dialog, style="Panel.TFrame")
+        buttons.grid(row=6, column=0, columnspan=2, sticky="e", padx=18, pady=(0, 18))
+
+        def begin():
+            size_names = {
+                "Wide and square": ["120x80", "80x80"],
+                "Wide, 120x80": ["120x80"],
+                "Square, 80x80": ["80x80"],
+            }[sizes_var.get()]
+            dialog.destroy()
+            self.start_sd_scan(root, source_var.get(), size_names, include_gba_var.get())
+
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side="right", padx=(8, 0))
+        ttk.Button(buttons, text="Scan", style="Accent.TButton", command=begin).pack(side="right")
+
+    def start_sd_scan(self, root: Path, source: str, size_names: list[str], include_gba: bool):
+        if self.scan_running:
+            return
+        self.scan_running = True
+        self.scan_sd_button.configure(state="disabled")
+        self.status_var.set("Scanning the SD card for supported games...")
+
+        def worker():
+            try:
+                result = self._scan_sd_worker(root, source, size_names, include_gba)
+                self.after(0, lambda: self.finish_sd_scan(result))
+            except Exception as exc:
+                self.after(0, lambda error=exc: self.fail_sd_scan(error))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def supported_files_on_sd(self, root: Path, include_gba: bool) -> list[tuple[Path, str]]:
+        found: list[tuple[Path, str]] = []
+        for current, directories, filenames in os.walk(root):
+            directories[:] = [
+                name
+                for name in directories
+                if not name.startswith(".") and name.casefold() not in SCAN_EXCLUDED_FOLDERS
+            ]
+            current_path = Path(current)
+            for filename in filenames:
+                if filename.startswith("."):
+                    continue
+                path = current_path / filename
+                system = system_for_path(path)
+                if not system or (system == DEFAULT_SYSTEM and not include_gba):
+                    continue
+                if path.name.casefold() in {"ezkernel.bin", "ezkernelnew.bin"}:
+                    continue
+                found.append((path, system))
+        return sorted(found, key=lambda item: str(item[0]).casefold())
+
+    def _scan_sd_worker(
+        self,
+        root: Path,
+        source: str,
+        size_names: list[str],
+        include_gba: bool,
+    ) -> dict:
+        files = self.supported_files_on_sd(root, include_gba)
+        folder = LIBRETRO_SOURCE_FOLDERS.get(source, "Named_Boxarts")
+        existing = {(item.new_code.casefold(), item.size) for item in self.custom_roms}
+        counts = {
+            size: sum(1 for item in self.custom_roms if item.size == size)
+            for size in size_names
+        }
+        matches: list[tuple[Path, str, str]] = []
+        unmatched: list[str] = []
+        seen_targets: set[str] = set()
+
+        for number, (path, system) in enumerate(files, start=1):
+            if number == 1 or number % 20 == 0:
+                self.after(
+                    0,
+                    lambda current=number, total=len(files): self.status_var.set(
+                        f"Matching installed games... {current}/{total}"
+                    ),
+                )
+            try:
+                target_name = validate_custom_art_name(path.stem)
+            except ValueError:
+                unmatched.append(f"Unsupported filename: {path.name}")
+                continue
+            target_key = target_name.casefold()
+            if target_key in seen_targets:
+                continue
+            seen_targets.add(target_key)
+            art_name = self.providers.find_libretro_art_name(target_name, system, folder)
+            if art_name:
+                matches.append((path, system, art_name))
+            else:
+                unmatched.append(f"{system}: {path.name}")
+
+        downloaded: dict[tuple[str, str], bytes] = {}
+        download_errors: list[str] = []
+        unique_art = {(system, art_name) for _path, system, art_name in matches}
+        if unique_art:
+            self.after(0, lambda: self.status_var.set(f"Downloading {len(unique_art)} matched images..."))
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                future_to_art = {
+                    executor.submit(http_get, libretro_raw_url(system, folder, art_name)): (system, art_name)
+                    for system, art_name in unique_art
+                }
+                for future in as_completed(future_to_art):
+                    key = future_to_art[future]
+                    try:
+                        downloaded[key] = future.result()
+                    except Exception:
+                        download_errors.append(f"{key[0]}: {display_libretro_name(key[1])}")
+
+        additions: list[CustomRomItem] = []
+        skipped_limit: list[str] = []
+        skipped_existing = 0
+        matched_files = 0
+        for path, system, art_name in matches:
+            data = downloaded.get((system, art_name))
+            if not data:
+                continue
+            matched_files += 1
+            result = ProviderResult("Libretro", art_name, data, system)
+            image_path = self.cache_provider_result(result, source)
+            for size in size_names:
+                key = (path.stem.casefold(), size)
+                if key in existing:
+                    skipped_existing += 1
+                    continue
+                if counts.get(size, 0) >= 256:
+                    skipped_limit.append(f"{size}: {path.name}")
+                    continue
+                additions.append(
+                    CustomRomItem(
+                        str(path),
+                        path.stem,
+                        "----",
+                        path.stem,
+                        image_path=image_path,
+                        size=size,
+                        system=system,
+                    )
+                )
+                existing.add(key)
+                counts[size] = counts.get(size, 0) + 1
+
+        return {
+            "files": len(files),
+            "matched_files": matched_files,
+            "additions": additions,
+            "unmatched": unmatched,
+            "download_errors": download_errors,
+            "skipped_limit": skipped_limit,
+            "skipped_existing": skipped_existing,
+        }
+
+    def finish_sd_scan(self, result: dict):
+        additions = result["additions"]
+        self.custom_roms.extend(additions)
+        self.refresh_custom_roms(
+            list(range(len(self.custom_roms) - len(additions), len(self.custom_roms))) if additions else []
+        )
+        self.save_settings()
+        self.scan_running = False
+        self.scan_sd_button.configure(state="normal")
+        self.status_var.set(f"SD scan complete. Added {len(additions)} custom artwork entries.")
+        self.show_sd_scan_results(result)
+
+    def fail_sd_scan(self, error: Exception):
+        self.scan_running = False
+        self.scan_sd_button.configure(state="normal")
+        self.status_var.set("SD scan failed.")
+        messagebox.showwarning(APP_NAME, str(error))
+
+    def show_sd_scan_results(self, result: dict):
+        dialog = tk.Toplevel(self)
+        dialog.title("SD Scan Results")
+        dialog.configure(bg="#152235")
+        dialog.transient(self)
+        dialog.geometry("620x430")
+        dialog.minsize(520, 340)
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(2, weight=1)
+        ttk.Label(dialog, text="SD library scan complete", style="Section.TLabel").grid(
+            row=0, column=0, sticky="w", padx=18, pady=(18, 6)
+        )
+        summary = (
+            f"Found {result['files']} supported files, matched {result['matched_files']}, "
+            f"and added {len(result['additions'])} artwork entries."
+        )
+        if result["skipped_existing"]:
+            summary += f" {result['skipped_existing']} existing entries were kept."
+        ttk.Label(dialog, text=summary, style="Muted.TLabel", wraplength=570).grid(
+            row=1, column=0, sticky="w", padx=18, pady=(0, 10)
+        )
+        details = []
+        if result["unmatched"]:
+            details.append("No Libretro match:\n" + "\n".join(result["unmatched"]))
+        if result["download_errors"]:
+            details.append("Could not download:\n" + "\n".join(result["download_errors"]))
+        if result["skipped_limit"]:
+            details.append("Not added because a CUSTOM folder reached 256 images:\n" + "\n".join(result["skipped_limit"]))
+        text_box = tk.Text(
+            dialog,
+            bg="#101a29",
+            fg="#edf4fb",
+            insertbackground="#edf4fb",
+            relief="flat",
+            wrap="word",
+            font=("Segoe UI", 9),
+        )
+        text_box.grid(row=2, column=0, sticky="nsew", padx=18, pady=(0, 12))
+        text_box.insert("1.0", "\n\n".join(details) if details else "Every supported file was matched.")
+        text_box.configure(state="disabled")
+        ttk.Button(dialog, text="Done", style="Accent.TButton", command=dialog.destroy).grid(
+            row=3, column=0, sticky="e", padx=18, pady=(0, 18)
+        )
 
     def next_custom_code(self) -> str:
         used = {item.new_code for item in self.custom_roms}
@@ -1640,7 +2149,16 @@ class ThumbnailScraperApp(tk.Tk):
                 continue
             if (thumb_name.casefold(), selected_size) in existing_names:
                 continue
-            self.custom_roms.append(CustomRomItem(str(path), title or path.stem, code or "----", thumb_name, size=selected_size))
+            self.custom_roms.append(
+                CustomRomItem(
+                    str(path),
+                    title or path.stem,
+                    code or "----",
+                    thumb_name,
+                    size=selected_size,
+                    system=system_for_path(path) or "",
+                )
+            )
             existing_paths.add((str(path), selected_size))
             existing_names.add((thumb_name.casefold(), selected_size))
             added += 1
@@ -1729,7 +2247,7 @@ class ThumbnailScraperApp(tk.Tk):
         self.custom_tree.delete(*self.custom_tree.get_children())
         for index, item in enumerate(self.custom_roms):
             image_name = Path(item.image_path).name if item.image_path else ""
-            source = Path(item.rom_path).name if item.rom_path else "Manual"
+            source = item.system or ("Manual" if not item.rom_path else "Other")
             self.custom_tree.insert("", "end", iid=str(index), values=(item.new_code, source, item.size, image_name))
         valid_selection = [str(index) for index in preserve_selection if 0 <= index < len(self.custom_roms)]
         if valid_selection:
@@ -1839,6 +2357,18 @@ class ThumbnailScraperApp(tk.Tk):
         if missing:
             messagebox.showwarning(APP_NAME, "Set images for every custom entry first.")
             return
+        counts = {
+            size: len({item.new_code.casefold() for item in self.custom_roms if item.size == size})
+            for size in ("80x80", "120x80")
+        }
+        over_limit = [size for size, count in counts.items() if count > 256]
+        if over_limit:
+            labels = ", ".join(over_limit)
+            messagebox.showwarning(
+                APP_NAME,
+                f"The {labels} CUSTOM output exceeds the 256-image limit. Remove some entries before building.",
+            )
+            return
         try:
             run_dir = self.output_run_dir()
             for item in self.custom_roms:
@@ -1862,7 +2392,8 @@ class ThumbnailScraperApp(tk.Tk):
         self.preview_photo = ImageTk.PhotoImage(preview)
         self.preview_label.configure(image=self.preview_photo, width=w * 3, height=h * 3)
         label = self.current_result.label if self.current_result else ""
-        self.preview_info.configure(text=f"{self.preview_provider_var.get()} - {label} - {w}x{h}")
+        system = self.current_result.system if self.current_result else self.preview_system_var.get()
+        self.preview_info.configure(text=f"{system} - {self.preview_provider_var.get()} - {label} - {w}x{h}")
         self.status_var.set("Preview ready.")
 
     def update_build_preview(self):
@@ -1878,6 +2409,9 @@ class ThumbnailScraperApp(tk.Tk):
         self.status_var.set("Build preview ready.")
 
     def add_exception(self):
+        if self.preview_system_var.get() != DEFAULT_SYSTEM:
+            messagebox.showinfo(APP_NAME, "Full-pack exceptions are only used for Game Boy Advance artwork.")
+            return
         if not self.current_result:
             messagebox.showinfo(APP_NAME, "Fetch or choose an image first.")
             return
@@ -2029,10 +2563,9 @@ class ThumbnailScraperApp(tk.Tk):
                     if art_match:
                         folder, art_name = art_match
                         task_art_names[task_number] = (folder, art_name)
-                        url_name = urllib.parse.quote(art_name)
                         unique_art_urls.setdefault(
                             (folder, art_name),
-                            LIBRETRO_RAW_BY_FOLDER.format(folder=folder, name=url_name),
+                            libretro_raw_url(DEFAULT_SYSTEM, folder, art_name),
                         )
 
                 if unique_art_urls:
@@ -2136,6 +2669,8 @@ class ThumbnailScraperApp(tk.Tk):
                 self.build_provider_var.set(data["build_provider"])
             if data.get("preview_provider") in PROVIDER_VALUES:
                 self.preview_provider_var.set(data["preview_provider"])
+            if data.get("preview_system") in LIBRETRO_SYSTEMS:
+                self.preview_system_var.set(data["preview_system"])
             legacy_source = data.get("libretro_source")
             build_source = data.get("build_libretro_source", legacy_source)
             preview_source = data.get("preview_libretro_source", legacy_source)
@@ -2172,6 +2707,7 @@ class ThumbnailScraperApp(tk.Tk):
                 item.setdefault("new_code", item.get("title", ""))
                 item.setdefault("image_path", "")
                 item.setdefault("size", "80x80")
+                item.setdefault("system", system_for_path(Path(item["rom_path"])) if item["rom_path"] else "")
                 try:
                     item["new_code"] = validate_custom_art_name(item["new_code"])
                     custom_loaded.append(CustomRomItem(**item))
@@ -2188,6 +2724,7 @@ class ThumbnailScraperApp(tk.Tk):
             "local_pack": self.local_pack_var.get(),
             "build_provider": self.build_provider_var.get(),
             "preview_provider": self.preview_provider_var.get(),
+            "preview_system": self.preview_system_var.get(),
             "build_libretro_source": self.build_libretro_source_var.get(),
             "preview_libretro_source": self.preview_libretro_source_var.get(),
             "region_order": self.region_order,
