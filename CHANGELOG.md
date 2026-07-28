@@ -6,6 +6,7 @@
 - Added SD library scanning to match only games already present on the card.
 - Added automatic CUSTOM output for non-GBA systems while preserving the existing GBA full-pack workflow.
 - Enforced the 256-image limit independently for wide and square CUSTOM artwork.
+- Updated compatibility information for DS Style v7.3.
 
 ## v1.4
 
