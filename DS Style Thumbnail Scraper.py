@@ -1061,7 +1061,7 @@ class ThumbnailScraperApp(tk.Tk):
         version_box = ttk.Frame(header, style="TFrame")
         version_box.pack(side="right", anchor="n")
         ttk.Label(version_box, text=f"DS Style Thumbnail Scraper v{APP_VERSION}", style="HeaderVersion.TLabel").pack(anchor="e")
-        ttk.Label(version_box, text="For DS Style v7.3", style="HeaderVersion.TLabel").pack(anchor="e", pady=(4, 0))
+        ttk.Label(version_box, text="For DS Style v7.4", style="HeaderVersion.TLabel").pack(anchor="e", pady=(4, 0))
 
         notebook = ttk.Notebook(self)
         self.notebook = notebook
