@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.9.1
+
+- Made the SD-card scan strictly cache-first: already-built, valid IMGS/IMGS2 thumbnails are detected before provider matching; existing custom-entry image files and a durable per-ROM source-image cache are checked before Libretro, TheGamesDB, ScreenScraper or IGDB are queried.
+- Added a per-ROM source-image cache keyed by console, selected artwork type and ROM-relative path. Successful Libretro/fallback results are written to this cache, so later scans can reuse the exact image without re-contacting providers even when a provider previously had no Libretro match.
+- Deferred Libretro artwork-index matching until after the output/cache checks, avoiding unnecessary index requests for games whose artwork is already present.
+- Added regression tests proving both Libretro matches and fallback-provider matches are served from per-ROM cache on subsequent scans, and that existing final thumbnails skip provider lookup entirely.
+
+## v1.9.0
+
+- Expanded automatic artwork fallback to a strict provider order: Libretro → TheGamesDB → ScreenScraper → IGDB. Providers are skipped when credentials are absent, system/platform matching is unavailable, or no fully decodable image is returned.
+- Wired ScreenScraper developer credentials into system-aware search. ScreenScraper user login is optional; if entered, username and password must be supplied together. The scraper resolves each console to a ScreenScraper system ID before searching.
+- Replaced the IGDB manual access-token field with Twitch Client ID + Client Secret. The scraper requests and caches OAuth app tokens, resolves IGDB platform IDs per console, and filters each game query to that platform. Existing manually saved access tokens remain a temporary compatibility fallback.
+- Changed the invalid/incomplete SD-scan image prompt from Retry Download to Try Fallback. Selecting it tries TheGamesDB, ScreenScraper, then IGDB, and caches the first valid result; Skip Image remains available.
+- Added provider-specific credential test actions and links to the credential/API pages for IGDB and ScreenScraper, alongside the existing TheGamesDB key test.
+- Added offline regression coverage for fallback order, platform-aware IGDB lookup, OAuth token exchange, ScreenScraper system lookup, invalid media rejection, and Try Fallback behavior.
+
+## v1.8.0
+
+- Added a dedicated TheGamesDB API-key control under Settings → Provider Credentials, including masked entry, Show/Hide, a link to request an API key, and a live Test key action.
+- Added a responsive status window to SD scans, showing folder enumeration, ROM matching, existing-thumbnail checks, provider fallback, cache work and download progress with elapsed time and current item details.
+- Moved Build Custom Art output generation to a background worker and added per-thumbnail progress, elapsed time and destination details so the application remains responsive during large builds.
+- Added regression tests for TheGamesDB key verification, progress callback dispatch and SD enumeration status updates.
+
 ## v1.7.0
 
 - Added automatic TheGamesDB artwork fallback when Libretro search has no usable match, using the selected console's platform ID to avoid cross-system results.

@@ -1,4 +1,4 @@
-DS STYLE THUMBNAIL SCRAPER v1.7.0
+DS STYLE THUMBNAIL SCRAPER v1.8.0
 
 For DS Style v7.4 or newer.
 
@@ -11,6 +11,8 @@ Run DS Style Thumbnail Scraper.exe.
 
 Finished artwork is saved in a dated folder inside DS Style Thumbnail Scraper output, beside the program.
 
+The Custom Art SD scan now opens a live progress window with the current phase, folder/game or download counts, current item and elapsed time. Build Custom Art also runs in the background and reports each thumbnail as it is written, keeping the application responsive during large builds.
+
 Build complete Game Boy Advance packs from Libretro or a local artwork pack. For other supported systems, choose the console when searching or use Scan SD Card on the Custom Art tab to find artwork only for games already on your card.
 
 Failed image downloads now prompt you to Retry Download or Skip Image. Successful source images are cached persistently, and repeat scans skip valid thumbnails already in cache, on the SD card under SYSTEM/IMGS or SYSTEM/IMGS2, or in prior scraper output folders. Corrupt or wrong-sized output thumbnails are regenerated.
@@ -20,9 +22,9 @@ By default, scanned ROM artwork mirrors each ROM's directory path under IMGS and
 The scraper does not download games or modify ROM files.
 
 
-THEGAMESDB FALLBACK (v1.7.0)
+THEGAMESDB FALLBACK (v1.7.0 / CREDENTIAL UI v1.8.0)
 
-When a Libretro search has no usable artwork match, the scraper automatically tries TheGamesDB using the selected system's platform ID. Add your TheGamesDB API key under Settings > Provider Credentials. TheGamesDB requires a key; without one, the failed fallback is reported clearly. Platform-name/ID data is cached for 30 days.
+When a Libretro search has no usable artwork match, the scraper automatically tries TheGamesDB using the selected system's platform ID. Under Settings > Provider Credentials, enter your TheGamesDB API key. Use Get TheGamesDB API key to open the official API page and Test key to check that the saved key works. The key is masked in the field by default and can be revealed with Show. The website username/password are not used by the API fallback; use an API key. Without one, the failed fallback is reported clearly. Platform-name/ID data is cached for 30 days.
 
 BOX ART FIT AND TRANSPARENCY (v1.7.0)
 

@@ -12,13 +12,16 @@ The [DS Style Manager](https://frankiet19.github.io/omega-de-ds-style-kernel/man
 
 ## Features
 
+- Cache-first incremental SD scans: reuse completed thumbnails and per-ROM cached source images before online provider lookup
+
 - `120 x 80` title thumbnails for `IMGS`
 - `80 x 80` box thumbnails for `IMGS2`
 - Libretro and local artwork-pack sources
-- System-aware Libretro search for supported consoles, with automatic TheGamesDB fallback when no usable Libretro artwork match is found
+- System-aware Libretro search with automatic TheGamesDB → ScreenScraper → IGDB fallback when no usable image is found
+- Provider credential setup and connection tests for TheGamesDB, ScreenScraper and IGDB, plus live status windows for SD scans and Custom Art builds
 - SD library scanning that finds artwork only for installed games
-- Retry/skip prompts for failed artwork downloads
-- Persistent source-image caching and incremental scans that skip existing valid `IMGS` / `IMGS2` thumbnails
+- Try Fallback / Skip Image prompts for unusable SD-scan artwork
+- Persistent per-ROM source-image caching and incremental scans that skip existing valid `IMGS` / `IMGS2` thumbnails before searching online providers
 - Region and artwork selection
 - Preview, crop, zoom, and per-entry adjustments
 - Exact-name custom artwork for files and folders
@@ -27,7 +30,7 @@ The [DS Style Manager](https://frankiet19.github.io/omega-de-ds-style-kernel/man
 - EZ-FLASH-compatible 15-bit BMP output with pure-black transparency key support
 - Aspect-preserving, centered box-art fitting for distinctly portrait or landscape source covers, with transparent/black-key margins
 
-The mirrored layout requires a DS Style kernel build that includes the matching mirrored-artwork lookup changes; older kernels continue to use their flat `CUSTOM` lookup. Automatic TheGamesDB fallback requires an API key, which you can enter under **Settings → Provider Credentials**. When Libretro has no usable match, the scraper searches TheGamesDB for the selected console/platform and prefers front box art. The **Custom Art** tab offers two output layouts:
+The mirrored layout requires a DS Style kernel build that includes the matching mirrored-artwork lookup changes; older kernels continue to use their flat `CUSTOM` lookup. Automatic artwork lookup follows **Libretro → TheGamesDB → ScreenScraper → IGDB** and skips a provider when its credentials are not configured, the console cannot be safely mapped, or the provider returns no fully decodable image. Enter provider credentials under **Settings → Provider Credentials**. TheGamesDB uses an API key; ScreenScraper requires developer ID/password and accepts an optional ScreenScraper user login; IGDB uses Twitch Client ID + Client Secret, and the app obtains its OAuth access token automatically. Each provider has a connection-test control where applicable. Credentials are stored in the local settings JSON file, so keep that file private. When SD scanning encounters an invalid Libretro download, **Try Fallback** advances through the other configured providers, while **Skip Image** continues without that artwork. Long-running SD scans and Custom Art builds display live progress details. The **Custom Art** tab offers two output layouts:
 
 - **Mirror ROM folders (recommended):** artwork follows each ROM's path relative to the SD root selected during Scan SD Card. This output is not limited by the flat `CUSTOM` artwork index. For example, `Game Boy/T/Tetris (World).gb` becomes `IMGS/Game Boy/T/Tetris (World).bmp` and `IMGS2/Game Boy/T/Tetris (World).bmp`.
 - **Legacy CUSTOM:** artwork is flattened into `IMGS/CUSTOM` and `IMGS2/CUSTOM`. The kernel's legacy indexed lookup supports up to 256 ordinary custom images per size. Extension defaults such as `gb.bmp` and `nes.bmp` are loaded directly and do not consume an index entry.

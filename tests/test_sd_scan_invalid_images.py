@@ -1,4 +1,4 @@
-"""Regression tests for invalid SD-scan downloads, user retry/skip, and caching."""
+"""Regression tests for invalid SD-scan downloads, fallback/skip, and caching."""
 
 import importlib.util
 import io
@@ -7,6 +7,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from PIL import Image
 
@@ -21,6 +22,10 @@ SPEC.loader.exec_module(APP_MODULE)
 class FakeProviders:
     def find_libretro_art_name(self, query, system, folder):
         return f"{query}.png"
+
+    def search_fallback_many(self, query, max_results=1, system=APP_MODULE.DEFAULT_SYSTEM,
+                             after_provider="Libretro", prior_errors=None):
+        raise LookupError(f"No fallback configured for {query} on {system}")
 
 
 class FakeStatus:
@@ -48,7 +53,7 @@ def make_app(base_dir: Path, choices=None):
         prompt_calls.append((system, art_name, str(error)))
         return choices.pop(0) if choices else "skip"
 
-    app.ask_sd_download_retry_skip = choose
+    app.ask_sd_download_fallback_skip = choose
     return app, prompt_calls
 
 
@@ -95,28 +100,34 @@ class SdScanInvalidImageTests(unittest.TestCase):
             self.assertEqual(len(prompts), 1)
             self.assertEqual(Path(result["additions"][0].image_path).suffix, ".png")
 
-    def test_retry_download_retries_invalid_payload_and_succeeds(self):
+    def test_try_fallback_uses_next_provider_instead_of_retrying_libretro(self):
         calls = []
 
         def fake_http_get(url):
             calls.append(url)
-            if len(calls) == 1:
-                return b"<html>temporary error</html>"
-            return png_bytes()
+            return b"<html>temporary error</html>"
 
         self.with_mock_downloads(fake_http_get)
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "sd"
             make_rom(root, "Retry Game")
-            app, prompts = make_app(Path(temp) / "app", ["retry"])
+            app, prompts = make_app(Path(temp) / "app", ["fallback"])
+            fallback_result = APP_MODULE.ProviderResult(
+                "TheGamesDB", "Retry Game - front.png", png_bytes(), "Game Boy"
+            )
+            app.providers.search_fallback_many = Mock(return_value=[fallback_result])
 
             result = app._scan_sd_worker(root, "Box Art", ["80x80"], False)
 
-            self.assertEqual(len(calls), 2)
+            self.assertEqual(len(calls), 1)
             self.assertEqual(len(prompts), 1)
             self.assertEqual(len(result["download_errors"]), 0)
             self.assertEqual(len(result["additions"]), 1)
             self.assertTrue(Path(result["additions"][0].image_path).is_file())
+            app.providers.search_fallback_many.assert_called_once_with(
+                "Retry Game", max_results=1, system="Game Boy", after_provider="Libretro",
+                prior_errors=["Libretro image download: Provider returned invalid or incomplete image data"],
+            )
 
     def test_second_scan_reuses_persistent_art_cache_without_network(self):
         calls = []
@@ -161,8 +172,12 @@ class SdScanInvalidImageTests(unittest.TestCase):
             Image.new("RGB", (80, 80), (40, 90, 120)).save(existing, format="BMP")
 
             app, prompts = make_app(Path(temp) / "app")
+            app.providers.find_libretro_art_name = Mock(
+                side_effect=AssertionError("Existing output should skip all provider matching")
+            )
             result = app._scan_sd_worker(root, "Box Art", ["80x80"], False)
 
+            app.providers.find_libretro_art_name.assert_not_called()
             self.assertEqual(calls, [])
             self.assertEqual(prompts, [])
             self.assertEqual(result["skipped_existing"], 1)
@@ -205,6 +220,80 @@ class SdScanInvalidImageTests(unittest.TestCase):
             self.assertEqual(result["cache_hits"], 1)
             self.assertEqual(len(result["additions"]), 1)
             self.assertTrue(Path(result["additions"][0].image_path).is_file())
+
+    def test_per_rom_cache_is_checked_before_libretro_or_fallback_search(self):
+        calls = []
+
+        def fake_http_get(url):
+            calls.append(url)
+            raise AssertionError("Cached artwork should prevent an online image request")
+
+        self.with_mock_downloads(fake_http_get)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "sd"
+            make_rom(root, "Cached First Game")
+            app_dir = Path(temp) / "app"
+            app, prompts = make_app(app_dir)
+            relative = "Game Boy/C/Cached First Game.gb"
+            cache_path = app.sd_scan_rom_cache_path(
+                "Named_Boxarts", "Game Boy", relative
+            )
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_bytes(png_bytes())
+            app.providers.find_libretro_art_name = Mock(
+                side_effect=AssertionError("Libretro lookup should happen only after cache misses")
+            )
+            app.providers.search_fallback_many = Mock(
+                side_effect=AssertionError("Fallback lookup should happen only after cache misses")
+            )
+
+            result = app._scan_sd_worker(root, "Box Art", ["80x80"], False)
+
+            app.providers.find_libretro_art_name.assert_not_called()
+            app.providers.search_fallback_many.assert_not_called()
+            self.assertEqual(calls, [])
+            self.assertEqual(prompts, [])
+            self.assertEqual(result["cache_hits"], 1)
+            self.assertEqual(len(result["additions"]), 1)
+            self.assertEqual(Path(result["additions"][0].image_path), cache_path)
+
+    def test_cached_fallback_art_is_reused_before_retrying_online_providers(self):
+        self.with_mock_downloads(lambda _url: (_ for _ in ()).throw(
+            AssertionError("Fallback result already contains image bytes")
+        ))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "sd"
+            make_rom(root, "Fallback Cached Game")
+            app_dir = Path(temp) / "app"
+            first_app, _prompts = make_app(app_dir)
+            first_app.providers.find_libretro_art_name = Mock(return_value=None)
+            fallback_result = APP_MODULE.ProviderResult(
+                "TheGamesDB", "Fallback Cached Game - front.png", png_bytes(), "Game Boy"
+            )
+            first_app.providers.search_fallback_many = Mock(return_value=[fallback_result])
+
+            first = first_app._scan_sd_worker(root, "Box Art", ["80x80"], False)
+            self.assertEqual(len(first["additions"]), 1)
+            first_app.providers.search_fallback_many.assert_called_once()
+
+            second_app, prompts = make_app(app_dir)
+            second_app.providers.find_libretro_art_name = Mock(
+                side_effect=AssertionError("A valid per-ROM cache should skip Libretro lookup")
+            )
+            second_app.providers.search_fallback_many = Mock(
+                side_effect=AssertionError("A valid per-ROM cache should skip fallback providers")
+            )
+            second = second_app._scan_sd_worker(root, "Box Art", ["80x80"], False)
+
+            second_app.providers.find_libretro_art_name.assert_not_called()
+            second_app.providers.search_fallback_many.assert_not_called()
+            self.assertEqual(prompts, [])
+            self.assertEqual(second["cache_hits"], 1)
+            self.assertEqual(len(second["additions"]), 1)
+            self.assertEqual(
+                Path(second["additions"][0].image_path),
+                Path(first["additions"][0].image_path),
+            )
 
     def test_previous_generated_imgs_folder_is_recognized(self):
         calls = []

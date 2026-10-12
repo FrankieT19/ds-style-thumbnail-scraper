@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import ctypes
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 import io
@@ -41,7 +42,7 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Thumbnail Scraper"
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.9.1"
 OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper output"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
 CONFIG_NAME = "thumbnail_scraper_settings.json"
@@ -66,6 +67,7 @@ BUILD_PREVIEW_SAMPLES = {
 GBA_IGDB_PLATFORM_ID = 24
 GBA_SCREENSCRAPER_SYSTEM_ID = 12
 PROVIDER_VALUES = ["Libretro", "Local Pack"]
+AUTOMATIC_PROVIDER_ORDER = ("Libretro", "TheGamesDB", "ScreenScraper", "IGDB")
 DEFAULT_SYSTEM = "Game Boy Advance"
 LIBRETRO_SYSTEMS = {
     "Game Boy Advance": {
@@ -138,6 +140,46 @@ THEGAMESDB_PLATFORM_ALIASES = {
     "Arcadia 2001": ("Emerson Arcadia 2001", "Arcadia 2001"),
     "Super Cassette Vision": ("Epoch Super Cassette Vision", "Super Cassette Vision"),
 }
+SCREENSCRAPER_SYSTEM_ALIASES = {
+    "Game Boy Advance": ("Game Boy Advance", "Nintendo Game Boy Advance", "GBA"),
+    "Game Boy": ("Game Boy", "Nintendo Game Boy", "GB"),
+    "Game Boy Color": ("Game Boy Color", "Nintendo Game Boy Color", "GBC"),
+    "Nintendo Entertainment System": ("Nintendo Entertainment System", "Nintendo Entertainment System (NES)", "NES", "Famicom"),
+    "Master System": ("Master System", "Sega Master System", "Mark III"),
+    "Game Gear": ("Game Gear", "Sega Game Gear"),
+    "SG-1000": ("SG-1000", "Sega SG-1000", "SEGA SG-1000"),
+    "PC Engine": ("PC Engine", "NEC PC Engine", "TurboGrafx-16", "TurboGrafx 16"),
+    "Neo Geo Pocket": ("Neo Geo Pocket", "SNK Neo Geo Pocket"),
+    "Neo Geo Pocket Color": ("Neo Geo Pocket Color", "SNK Neo Geo Pocket Color"),
+    "WonderSwan": ("WonderSwan", "Bandai WonderSwan"),
+    "WonderSwan Color": ("WonderSwan Color", "Bandai WonderSwan Color"),
+    "MSX": ("MSX", "MSX 1", "Microsoft MSX"),
+    "Watara Supervision": ("Watara Supervision", "Supervision"),
+    "ZX Spectrum": ("ZX Spectrum", "Sinclair ZX Spectrum"),
+    "ColecoVision": ("ColecoVision", "Colecovision"),
+    "Arcadia 2001": ("Arcadia 2001", "Emerson Arcadia 2001"),
+    "Super Cassette Vision": ("Super Cassette Vision", "Epoch Super Cassette Vision"),
+}
+IGDB_PLATFORM_ALIASES = {
+    "Game Boy Advance": ("Game Boy Advance", "Nintendo Game Boy Advance"),
+    "Game Boy": ("Game Boy", "Nintendo Game Boy"),
+    "Game Boy Color": ("Game Boy Color", "Nintendo Game Boy Color"),
+    "Nintendo Entertainment System": ("Nintendo Entertainment System", "Nintendo Entertainment System (NES)", "Famicom"),
+    "Master System": ("Master System", "Sega Master System"),
+    "Game Gear": ("Game Gear", "Sega Game Gear"),
+    "SG-1000": ("SG-1000", "Sega SG-1000"),
+    "PC Engine": ("PC Engine", "TurboGrafx-16", "TurboGrafx-16/PC Engine"),
+    "Neo Geo Pocket": ("Neo Geo Pocket",),
+    "Neo Geo Pocket Color": ("Neo Geo Pocket Color",),
+    "WonderSwan": ("WonderSwan",),
+    "WonderSwan Color": ("WonderSwan Color",),
+    "MSX": ("MSX", "MSX 1"),
+    "Watara Supervision": ("Watara Supervision", "Supervision"),
+    "ZX Spectrum": ("ZX Spectrum", "Sinclair ZX Spectrum"),
+    "ColecoVision": ("ColecoVision", "Colecovision"),
+    "Arcadia 2001": ("Arcadia 2001",),
+    "Super Cassette Vision": ("Super Cassette Vision",),
+}
 GBA_SOURCE_CACHE_FILES = {
     "Named_Boxarts": "libretro_gba_boxarts.json",
     "Named_Snaps": "libretro_gba_snaps.json",
@@ -197,6 +239,29 @@ def post_json(url: str, body: str, headers: dict[str, str]) -> list | dict:
         if exc.code == 403:
             raise LookupError("The provider refused the request (403 Forbidden). Check the account/API key, and try again later if the service is rate-limiting.") from exc
         raise
+
+
+def post_form_json(url: str, fields: dict[str, str]) -> dict:
+    """POST form-encoded fields and parse the JSON response (Twitch OAuth)."""
+    request = urllib.request.Request(
+        url,
+        data=urllib.parse.urlencode(fields).encode("utf-8"),
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+            "User-Agent": WEB_HEADERS.get("User-Agent", APP_NAME),
+        },
+        method="POST",
+    )
+    try:
+        payload = json.loads(urllib.request.urlopen(request, timeout=30).read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        if exc.code in (400, 401, 403):
+            raise LookupError("The authentication service rejected the credentials. Check the Client ID and Client Secret.") from exc
+        raise
+    if not isinstance(payload, dict):
+        raise LookupError("The authentication service returned an unexpected response.")
+    return payload
 
 
 def fetch_bytes(url: str, headers: dict[str, str] | None = None) -> bytes:
@@ -385,6 +450,123 @@ class SdArtworkMatch:
     image_data: bytes | None = None
 
 
+class OperationProgressWindow:
+    """Small responsive status window for long-running background operations."""
+
+    def __init__(self, parent: tk.Misc, title: str, heading: str):
+        self.parent = parent
+        self.started_at = time.monotonic()
+        self._progress_mode = "indeterminate"
+        self._clock_after_id = None
+        self.window = tk.Toplevel(parent)
+        self.window.title(title)
+        self.window.configure(bg="#152235")
+        self.window.transient(parent)
+        self.window.resizable(False, False)
+        self.window.protocol("WM_DELETE_WINDOW", lambda: None)
+        self.window.columnconfigure(0, weight=1)
+
+        self.heading_var = tk.StringVar(value=heading)
+        self.detail_var = tk.StringVar(value="The app is working. This window will update as work progresses.")
+        self.elapsed_var = tk.StringVar(value="Elapsed: 00:00")
+        self.progress_var = tk.DoubleVar(value=0.0)
+
+        ttk.Label(
+            self.window,
+            text=title,
+            style="Section.TLabel",
+        ).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 4))
+        ttk.Label(
+            self.window,
+            textvariable=self.heading_var,
+            style="Muted.TLabel",
+            wraplength=520,
+        ).grid(row=1, column=0, sticky="w", padx=18, pady=(2, 8))
+        self.progress_bar = ttk.Progressbar(
+            self.window,
+            orient="horizontal",
+            mode="indeterminate",
+            maximum=100,
+            variable=self.progress_var,
+            length=520,
+        )
+        self.progress_bar.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 8))
+        self.progress_bar.start(12)
+        ttk.Label(
+            self.window,
+            textvariable=self.detail_var,
+            style="Muted.TLabel",
+            wraplength=520,
+        ).grid(row=3, column=0, sticky="w", padx=18, pady=(0, 8))
+        ttk.Label(
+            self.window,
+            textvariable=self.elapsed_var,
+            style="Muted.TLabel",
+        ).grid(row=4, column=0, sticky="w", padx=18, pady=(0, 16))
+
+        self.window.update_idletasks()
+        x = parent.winfo_rootx() + max(0, (parent.winfo_width() - self.window.winfo_width()) // 2)
+        y = parent.winfo_rooty() + max(0, (parent.winfo_height() - self.window.winfo_height()) // 2)
+        self.window.geometry(f"+{x}+{y}")
+        self.window.grab_set()
+        self._tick_elapsed()
+
+    def _tick_elapsed(self):
+        try:
+            if not self.window.winfo_exists():
+                return
+            elapsed = max(0, int(time.monotonic() - self.started_at))
+            minutes, seconds = divmod(elapsed, 60)
+            hours, minutes = divmod(minutes, 60)
+            if hours:
+                formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            else:
+                formatted = f"{minutes:02d}:{seconds:02d}"
+            self.elapsed_var.set(f"Elapsed: {formatted}")
+            self._clock_after_id = self.parent.after(1000, self._tick_elapsed)
+        except tk.TclError:
+            return
+
+    def update_progress(
+        self,
+        heading: str,
+        current: int | None = None,
+        total: int | None = None,
+        detail: str = "",
+    ):
+        try:
+            if not self.window.winfo_exists():
+                return
+            self.heading_var.set(heading)
+            self.detail_var.set(detail or "Please wait...")
+            if current is not None and total is not None and total > 0:
+                if self._progress_mode != "determinate":
+                    self.progress_bar.stop()
+                    self.progress_bar.configure(mode="determinate")
+                    self._progress_mode = "determinate"
+                self.progress_var.set(max(0.0, min(100.0, current / total * 100.0)))
+            elif self._progress_mode != "indeterminate":
+                self.progress_var.set(0.0)
+                self.progress_bar.configure(mode="indeterminate")
+                self.progress_bar.start(12)
+                self._progress_mode = "indeterminate"
+        except tk.TclError:
+            pass
+
+    def close(self):
+        try:
+            if self._clock_after_id is not None:
+                self.parent.after_cancel(self._clock_after_id)
+            self.progress_bar.stop()
+            try:
+                self.window.grab_release()
+            except tk.TclError:
+                pass
+            self.window.destroy()
+        except tk.TclError:
+            pass
+
+
 def validate_custom_art_name(value: str) -> str:
     name = value.strip()
     if name.lower().endswith(".bmp"):
@@ -416,6 +598,11 @@ class Providers:
         self.libretro_indexes: dict[tuple[str, str], list[str]] = {}
         self.libretro_direct_indexes: dict[tuple, tuple[dict[str, str], list[str]]] = {}
         self.local_art_index = None
+        self._igdb_access_token = ""
+        self._igdb_token_expires_at = 0.0
+        self._igdb_platform_ids: dict[str, int] = {}
+        self._igdb_platform_catalog: list[dict] | None = None
+        self._screenscraper_system_records: list[dict] | None = None
 
     def search(
         self,
@@ -445,6 +632,7 @@ class Providers:
     ) -> list[ProviderResult]:
         provider = provider_key(provider)
         if provider == "Libretro":
+            errors: list[str] = []
             try:
                 libretro_results = self.search_libretro_many(query, max_results, libretro_source, system)
                 usable_results = [
@@ -454,22 +642,103 @@ class Providers:
                     return usable_results
                 raise LookupError("Libretro returned no usable image data for this match.")
             except Exception as libretro_error:
-                try:
-                    return self.search_thegamesdb_many(query, max_results, system=system)
-                except Exception as fallback_error:
-                    raise LookupError(
-                        f"Libretro did not return usable artwork for {query!r} ({libretro_error}).\n\n"
-                        f"TheGamesDB fallback was also unsuccessful: {fallback_error}"
-                    ) from fallback_error
+                errors.append(f"Libretro: {libretro_error}")
+            return self.search_fallback_many(
+                query,
+                max_results=max_results,
+                system=system,
+                after_provider="Libretro",
+                prior_errors=errors,
+            )
+        results = self._search_direct_many(provider, query, max_results, libretro_source, system)
+        usable_results = [result for result in results if is_valid_image_data(result.image_data)]
+        if not usable_results:
+            raise LookupError(f"{provider} returned no valid or complete image data for {query!r}.")
+        return usable_results if max_results is None else usable_results[:max_results]
+
+    def _search_direct_many(
+        self,
+        provider: str,
+        query: str,
+        max_results: int | None,
+        libretro_source: str | None,
+        system: str,
+    ) -> list[ProviderResult]:
         if provider == "Local Pack":
             return self.search_local_pack_many(query, max_results)
         if provider == "IGDB":
-            return self.search_igdb_many(query, max_results)
+            return self.search_igdb_many(query, max_results, system=system)
         if provider == "TheGamesDB":
             return self.search_thegamesdb_many(query, max_results, system=system)
         if provider == "ScreenScraper":
-            return self.search_screenscraper_many(query, max_results)
+            return self.search_screenscraper_many(query, max_results, system=system)
+        if provider == "Libretro":
+            return self.search_libretro_many(query, max_results, libretro_source, system)
         raise ValueError(f"Unknown provider: {provider}")
+
+    def _credential_value(self, name: str) -> str:
+        variable = getattr(self.app, name, None)
+        return variable.get().strip() if variable is not None else ""
+
+    def provider_is_configured(self, provider: str) -> bool:
+        if provider == "TheGamesDB":
+            return bool(self._credential_value("tgdb_key_var"))
+        if provider == "ScreenScraper":
+            return bool(
+                self._credential_value("ss_dev_id_var")
+                and self._credential_value("ss_dev_pass_var")
+            )
+        if provider == "IGDB":
+            return bool(
+                self._credential_value("igdb_client_var")
+                and (self._credential_value("igdb_secret_var") or self._credential_value("igdb_token_var"))
+            )
+        return provider == "Libretro"
+
+    def search_fallback_many(
+        self,
+        query: str,
+        max_results: int | None = 1,
+        system: str = DEFAULT_SYSTEM,
+        after_provider: str = "Libretro",
+        prior_errors: list[str] | None = None,
+    ) -> list[ProviderResult]:
+        """Search providers in the fixed automatic order after a miss/failure.
+
+        Invalid image bytes count as a provider failure and do not block attempts
+        against later services. Explicit manual provider searches still remain
+        scoped to the provider the user selected.
+        """
+        order = list(AUTOMATIC_PROVIDER_ORDER)
+        normalized_after = provider_key(after_provider)
+        try:
+            start_index = order.index(normalized_after) + 1
+        except ValueError:
+            start_index = 0
+        errors = list(prior_errors or [])
+        requested_limit = 20 if max_results is None else max(1, int(max_results))
+        for provider in order[start_index:]:
+            if not self.provider_is_configured(provider):
+                if provider == "TheGamesDB":
+                    detail = "API key not configured (Settings → Provider Credentials)"
+                elif provider == "ScreenScraper":
+                    detail = "developer ID/password not configured (Settings → Provider Credentials)"
+                else:
+                    detail = "Client ID and Client Secret not configured (Settings → Provider Credentials)"
+                errors.append(f"{provider}: {detail}")
+                continue
+            try:
+                results = self._search_direct_many(provider, query, requested_limit, None, system)
+                usable = [result for result in results if is_valid_image_data(result.image_data)]
+                if usable:
+                    return usable[:requested_limit]
+                raise LookupError("provider returned no usable or complete image data")
+            except Exception as exc:
+                errors.append(f"{provider}: {exc}")
+        details = "\n".join(f"• {detail}" for detail in errors)
+        raise LookupError(
+            f"No usable artwork found for {query!r} on {system}. The provider fallback chain was exhausted.\n\n{details}"
+        )
 
     def get_libretro_index(self, system: str, folder: str) -> list[str]:
         key = (system, folder)
@@ -727,38 +996,128 @@ class Providers:
         except ValueError:
             return art.path.name
 
-    def search_igdb_many(self, query: str, max_results: int = 20) -> list[ProviderResult]:
-        client_id = self.app.igdb_client_var.get().strip()
-        token = self.app.igdb_token_var.get().strip()
-        if not client_id or not token:
-            raise LookupError("IGDB needs a Client ID and bearer access token.")
-        headers = {
+    def _igdb_auth_headers(self, force_refresh: bool = False) -> dict[str, str]:
+        """Return IGDB API headers, refreshing an OAuth app token as needed.
+
+        New settings use Twitch Client ID + Client Secret. The prior manually
+        supplied access-token setting remains as a compatibility fallback for
+        existing settings files, although those tokens can expire.
+        """
+        client_id = self._credential_value("igdb_client_var")
+        client_secret = self._credential_value("igdb_secret_var")
+        legacy_token = self._credential_value("igdb_token_var")
+        if not client_id:
+            raise LookupError("IGDB needs a Twitch Client ID in Settings → Provider Credentials.")
+        if client_secret:
+            if not force_refresh and self._igdb_access_token and time.time() < self._igdb_token_expires_at:
+                token = self._igdb_access_token
+            else:
+                response = post_form_json(
+                    "https://id.twitch.tv/oauth2/token",
+                    {
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "grant_type": "client_credentials",
+                    },
+                )
+                token = str(response.get("access_token") or "").strip()
+                if not token:
+                    raise LookupError("Twitch OAuth did not return an IGDB access token. Check the Client ID and Client Secret.")
+                try:
+                    lifetime = max(60, int(response.get("expires_in", 3600)))
+                except (TypeError, ValueError):
+                    lifetime = 3600
+                self._igdb_access_token = token
+                self._igdb_token_expires_at = time.time() + lifetime - min(120, lifetime // 10)
+        elif legacy_token:
+            token = legacy_token
+        else:
+            raise LookupError("IGDB needs both a Twitch Client ID and Client Secret in Settings → Provider Credentials.")
+        return {
             "Client-ID": client_id,
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
         }
-        safe_query = query.replace('"', '\\"')
+
+    def test_igdb_credentials(self) -> int:
+        headers = self._igdb_auth_headers(force_refresh=True)
+        payload = post_json("https://api.igdb.com/v4/platforms", "fields id,name; limit 5;", headers)
+        if not isinstance(payload, list) or not payload:
+            raise LookupError("IGDB authenticated, but returned no platform data.")
+        return len(payload)
+
+    def _igdb_platform_id(self, system: str, headers: dict[str, str]) -> int:
+        if system in self._igdb_platform_ids:
+            return self._igdb_platform_ids[system]
+        aliases = IGDB_PLATFORM_ALIASES.get(system, (system,))
+        wanted = {self._platform_key(alias) for alias in aliases}
+        if self._igdb_platform_catalog is None:
+            payload = post_json(
+                "https://api.igdb.com/v4/platforms",
+                "fields id,name,slug; limit 500;",
+                headers,
+            )
+            if not isinstance(payload, list):
+                raise LookupError("IGDB returned an unexpected platform list.")
+            self._igdb_platform_catalog = [item for item in payload if isinstance(item, dict)]
+        for platform in self._igdb_platform_catalog:
+            if self._platform_key(platform.get("name", "")) in wanted or self._platform_key(platform.get("slug", "")) in wanted:
+                try:
+                    platform_id = int(platform["id"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                self._igdb_platform_ids[system] = platform_id
+                return platform_id
+        raise LookupError(
+            f"IGDB did not return a known platform ID for {system}; no cross-console search was performed."
+        )
+
+    def search_igdb_many(
+        self,
+        query: str,
+        max_results: int | None = 20,
+        system: str = DEFAULT_SYSTEM,
+    ) -> list[ProviderResult]:
+        headers = self._igdb_auth_headers()
+        platform_id = self._igdb_platform_id(system, headers)
+        safe_query = query.replace('\\', '\\\\').replace('"', '\\"')
         body = (
             "fields name,cover.image_id,artworks.image_id;"
             f' search "{safe_query}";'
-            f" where platforms = ({GBA_IGDB_PLATFORM_ID}); limit 10;"
+            f" where platforms = ({platform_id}); limit 10;"
         )
         games = post_json("https://api.igdb.com/v4/games", body, headers)
-        results = []
+        if not isinstance(games, list):
+            raise LookupError("IGDB returned an unexpected game-search response.")
+        results: list[ProviderResult] = []
+        limit = 20 if max_results is None else max(1, int(max_results))
         for game in games:
+            if not isinstance(game, dict):
+                continue
             image_ids = []
-            if game.get("artworks"):
-                image_ids.extend(item.get("image_id") for item in game["artworks"] if item.get("image_id"))
-            if game.get("cover") and game["cover"].get("image_id"):
+            if isinstance(game.get("artworks"), list):
+                image_ids.extend(
+                    item.get("image_id") for item in game["artworks"]
+                    if isinstance(item, dict) and item.get("image_id")
+                )
+            if isinstance(game.get("cover"), dict) and game["cover"].get("image_id"):
                 image_ids.append(game["cover"]["image_id"])
             for image_id in image_ids[:5]:
                 url = f"https://images.igdb.com/igdb/image/upload/t_720p/{image_id}.jpg"
-                results.append(ProviderResult("IGDB", f"{game.get('name', query)} - {image_id}", fetch_bytes(url)))
-                if len(results) >= max_results:
+                try:
+                    image_data = fetch_bytes(url)
+                    if not is_valid_image_data(image_data):
+                        continue
+                except Exception:
+                    continue
+                results.append(
+                    ProviderResult("IGDB", f"{game.get('name', query)} - {image_id}", image_data, system)
+                )
+                if len(results) >= limit:
                     return results
         if not results:
-            raise LookupError("No IGDB artwork found.")
-        return results[:max_results]
+            raise LookupError(f"No valid IGDB artwork found for {query!r} on {system}.")
+        return results[:limit]
 
     @staticmethod
     def _platform_key(name: str) -> str:
@@ -815,6 +1174,35 @@ class Providers:
         except OSError:
             pass
         return platforms
+
+    @staticmethod
+    def test_thegamesdb_api_key(api_key: str) -> int:
+        """Validate a TheGamesDB API key with a fresh authenticated request.
+
+        This deliberately bypasses the platform cache so the Settings button
+        verifies the key the user has currently entered, not stale cached data.
+        """
+        key = api_key.strip()
+        if not key:
+            raise LookupError("Enter your TheGamesDB API key first.")
+        params = urllib.parse.urlencode({"apikey": key})
+        response = request_json(f"{THEGAMESDB_BASE_URL}/v1/Platforms?{params}", WEB_HEADERS)
+        payload = response.get("data", {}) if isinstance(response, dict) else {}
+        platforms = payload.get("platforms") if isinstance(payload, dict) else None
+        if isinstance(platforms, dict):
+            count = sum(1 for value in platforms.values() if isinstance(value, dict))
+        elif isinstance(platforms, list):
+            count = sum(1 for value in platforms if isinstance(value, dict))
+        else:
+            count = 0
+        if count <= 0:
+            message = "TheGamesDB did not return a platform list. Check the API key and try again."
+            if isinstance(response, dict):
+                detail = response.get("status") or response.get("message")
+                if detail:
+                    message = f"TheGamesDB rejected or could not validate the key: {detail}"
+            raise LookupError(message)
+        return count
 
     def thegamesdb_platform_id(self, system: str) -> int:
         aliases = THEGAMESDB_PLATFORM_ALIASES.get(system, (system,))
@@ -899,46 +1287,149 @@ class Providers:
             raise LookupError(f"No TheGamesDB box art match found for {query!r} on {system}.")
         return results
 
-    def search_screenscraper_many(self, query: str, max_results: int = 20) -> list[ProviderResult]:
-        devid = self.app.ss_dev_id_var.get().strip()
-        devpassword = self.app.ss_dev_pass_var.get().strip()
-        ssid = self.app.ss_user_var.get().strip()
-        sspassword = self.app.ss_pass_var.get().strip()
+    def _screenscraper_credentials(self) -> dict[str, str]:
+        devid = self._credential_value("ss_dev_id_var")
+        devpassword = self._credential_value("ss_dev_pass_var")
         if not devid or not devpassword:
-            raise LookupError("ScreenScraper needs developer credentials. This is an advanced/paid provider.")
-        if not ssid or not sspassword:
-            raise LookupError("ScreenScraper needs your username and password as well as developer credentials.")
-        params = urllib.parse.urlencode(
-            {
-                "devid": devid,
-                "devpassword": devpassword,
-                "softname": APP_NAME,
-                "ssid": ssid,
-                "sspassword": sspassword,
-                "systemeid": GBA_SCREENSCRAPER_SYSTEM_ID,
-                "recherche": query,
-                "output": "json",
-            }
+            raise LookupError(
+                "ScreenScraper fallback needs a developer ID and developer password in Settings → Provider Credentials. "
+                "ScreenScraper developer access may need to be requested from the service."
+            )
+        params = {
+            "devid": devid,
+            "devpassword": devpassword,
+            "softname": APP_NAME,
+            "output": "json",
+        }
+        ssid = self._credential_value("ss_user_var")
+        sspassword = self._credential_value("ss_pass_var")
+        if ssid and sspassword:
+            params["ssid"] = ssid
+            params["sspassword"] = sspassword
+        elif ssid or sspassword:
+            raise LookupError("ScreenScraper username and password must either both be filled in or both be blank.")
+        return params
+
+    @staticmethod
+    def _screen_system_names(system_record: dict) -> list[str]:
+        names: list[str] = []
+        name_keys = {"nom", "name", "nomcourt", "nom_court", "nomlong", "nom_long", "nom_eu", "nom_us", "nom_jp", "nom_fr", "nom_en", "alias", "aliases"}
+
+        def collect(value, key_hint: str = ""):
+            if isinstance(value, str):
+                if key_hint in name_keys or "nom" in key_hint or "name" in key_hint or "alias" in key_hint:
+                    cleaned = value.strip()
+                    if cleaned and cleaned not in names:
+                        names.append(cleaned)
+            elif isinstance(value, dict):
+                for child_key, child_value in value.items():
+                    normalized_key = str(child_key).casefold()
+                    if normalized_key in name_keys or "nom" in normalized_key or "name" in normalized_key or "alias" in normalized_key:
+                        collect(child_value, normalized_key)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item, key_hint)
+
+        for key, value in system_record.items():
+            normalized_key = str(key).casefold()
+            if normalized_key in name_keys or "nom" in normalized_key or "name" in normalized_key or "alias" in normalized_key:
+                collect(value, normalized_key)
+        return names
+
+    def screenscraper_systems(self, refresh: bool = False) -> list[dict]:
+        if self._screenscraper_system_records is not None and not refresh:
+            return self._screenscraper_system_records
+        params = self._screenscraper_credentials()
+        payload = request_json(
+            "https://www.screenscraper.fr/api2/systemesListe.php?" + urllib.parse.urlencode(params),
+            WEB_HEADERS,
         )
-        results = []
-        data = request_json(f"https://www.screenscraper.fr/api2/jeuRecherche.php?{params}", WEB_HEADERS)
-        games = data.get("response", {}).get("jeux", {}).get("jeu") or []
+        response = payload.get("response", {}) if isinstance(payload, dict) else {}
+        systems_block = response.get("systemes", {}) if isinstance(response, dict) else {}
+        systems = systems_block.get("systeme", []) if isinstance(systems_block, dict) else systems_block
+        if isinstance(systems, dict):
+            systems = [systems]
+        if not isinstance(systems, list):
+            systems = []
+        records = []
+        for item in systems:
+            if not isinstance(item, dict):
+                continue
+            system_id = item.get("id") or item.get("systemeid")
+            names = self._screen_system_names(item)
+            if system_id is not None and names:
+                records.append({"id": str(system_id), "names": names})
+        if not records:
+            detail = response.get("message") or response.get("erreur") or "no systems were returned"
+            raise LookupError(f"ScreenScraper did not return a usable system list ({detail}). Check developer credentials.")
+        self._screenscraper_system_records = records
+        return records
+
+    def screenscraper_system_id(self, system: str) -> str:
+        aliases = SCREENSCRAPER_SYSTEM_ALIASES.get(system, (system,))
+        wanted = {self._platform_key(alias) for alias in aliases}
+        for record in self.screenscraper_systems():
+            if wanted.intersection(self._platform_key(name) for name in record["names"]):
+                return str(record["id"])
+        raise LookupError(
+            f"ScreenScraper has no known system mapping for {system}; no cross-console search was performed."
+        )
+
+    def test_screenscraper_credentials(self) -> int:
+        systems = self.screenscraper_systems(refresh=True)
+        return len(systems)
+
+    def search_screenscraper_many(
+        self,
+        query: str,
+        max_results: int | None = 20,
+        system: str = DEFAULT_SYSTEM,
+    ) -> list[ProviderResult]:
+        params = self._screenscraper_credentials()
+        params["systemeid"] = self.screenscraper_system_id(system)
+        params["recherche"] = query
+        data = request_json(
+            "https://www.screenscraper.fr/api2/jeuRecherche.php?" + urllib.parse.urlencode(params),
+            WEB_HEADERS,
+        )
+        response = data.get("response", {}) if isinstance(data, dict) else {}
+        games_block = response.get("jeux", {}) if isinstance(response, dict) else {}
+        games = games_block.get("jeu", []) if isinstance(games_block, dict) else games_block
         if isinstance(games, dict):
             games = [games]
+        if not isinstance(games, list):
+            games = []
+        results: list[ProviderResult] = []
+        limit = 20 if max_results is None else max(1, int(max_results))
+        preferred_types = ("box-2D", "box-3D", "wheel-hd", "wheel", "sstitle", "screenmarquee", "steamgrid")
         for game in games:
-            medias = game.get("medias", {}).get("media", [])
+            if not isinstance(game, dict):
+                continue
+            title = game.get("nom") or game.get("nom_eu") or game.get("name") or query
+            medias_block = game.get("medias", {})
+            medias = medias_block.get("media", []) if isinstance(medias_block, dict) else medias_block
             if isinstance(medias, dict):
                 medias = [medias]
-            title = game.get("nom") or query
-            for preferred in ("box-2D", "steamgrid", "sstitle", "screenmarquee"):
+            if not isinstance(medias, list):
+                medias = []
+            for preferred in preferred_types:
                 for media in medias:
-                    if media.get("type") == preferred and media.get("url"):
-                        results.append(ProviderResult("ScreenScraper", f"{title} - {preferred}", fetch_bytes(media["url"])))
-                        if len(results) >= max_results:
-                            return results
+                    if not isinstance(media, dict) or media.get("type") != preferred or not media.get("url"):
+                        continue
+                    try:
+                        image_data = fetch_bytes(str(media["url"]))
+                        if not is_valid_image_data(image_data):
+                            continue
+                    except Exception:
+                        continue
+                    results.append(ProviderResult("ScreenScraper", f"{title} - {preferred}", image_data, system))
+                    if len(results) >= limit:
+                        return results
         if not results:
-            raise LookupError("No ScreenScraper media found.")
-        return results[:max_results]
+            detail = response.get("message") or response.get("erreur")
+            suffix = f" ({detail})" if detail else ""
+            raise LookupError(f"No valid ScreenScraper box art found for {query!r} on {system}{suffix}.")
+        return results[:limit]
 
 
 def crop_image(image: Image.Image, size: tuple[int, int], crop: CropSettings) -> Image.Image:
@@ -997,9 +1488,30 @@ class ThumbnailScraperApp(tk.Tk):
         self.custom_output_layout_var = tk.StringVar(value="Mirror ROM folders")
         self.custom_preview_photo = None
         self.running = False
+        self.custom_build_running = False
         self.cancel_build_requested = False
         self.loading_custom_crop = False
         self.scan_running = False
+        self.sd_scan_progress_window: OperationProgressWindow | None = None
+        self.custom_art_progress_window: OperationProgressWindow | None = None
+        self.tgdb_test_progress_window: OperationProgressWindow | None = None
+        self.igdb_test_progress_window: OperationProgressWindow | None = None
+        self.ss_test_progress_window: OperationProgressWindow | None = None
+        self.tgdb_test_button: ttk.Button | None = None
+        self.igdb_test_button: ttk.Button | None = None
+        self.ss_test_button: ttk.Button | None = None
+        self.tgdb_key_entry: ttk.Entry | None = None
+        self.tgdb_key_reveal_button: ttk.Button | None = None
+        self.tgdb_key_visible = False
+        self.igdb_secret_entry: ttk.Entry | None = None
+        self.igdb_secret_reveal_button: ttk.Button | None = None
+        self.igdb_secret_visible = False
+        self.ss_dev_pass_entry: ttk.Entry | None = None
+        self.ss_dev_pass_reveal_button: ttk.Button | None = None
+        self.ss_dev_pass_visible = False
+        self.ss_pass_entry: ttk.Entry | None = None
+        self.ss_pass_reveal_button: ttk.Button | None = None
+        self.ss_pass_visible = False
 
         self.build_provider_var = tk.StringVar(value="Libretro")
         self.preview_provider_var = tk.StringVar(value="Libretro")
@@ -1015,6 +1527,9 @@ class ThumbnailScraperApp(tk.Tk):
         self.build_progress_var = tk.DoubleVar(value=0.0)
         self.local_pack_var = tk.StringVar()
         self.igdb_client_var = tk.StringVar()
+        self.igdb_secret_var = tk.StringVar()
+        # Preserved only to support settings files made before automatic OAuth
+        # support. New installs should supply the Client Secret, not an access token.
         self.igdb_token_var = tk.StringVar()
         self.tgdb_key_var = tk.StringVar()
         self.ss_dev_id_var = tk.StringVar()
@@ -1243,15 +1758,18 @@ class ThumbnailScraperApp(tk.Tk):
         self.preview_tab = ttk.Frame(notebook, style="Panel.TFrame", padding=14)
         self.custom_tab = ttk.Frame(notebook, style="Panel.TFrame", padding=14)
         self.exceptions_tab = ttk.Frame(notebook, style="Panel.TFrame", padding=14)
+        self.settings_tab = ttk.Frame(notebook, style="Panel.TFrame", padding=14)
         notebook.add(self.build_tab, text="Build Pack")
         notebook.add(self.preview_tab, text="Search & Preview")
         notebook.add(self.custom_tab, text="Custom Art")
         notebook.add(self.exceptions_tab, text="Exceptions")
+        notebook.add(self.settings_tab, text="Settings")
         notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
         self._build_build_tab()
         self._build_preview_tab()
         self._build_custom_tab()
         self._build_exceptions_tab()
+        self._build_settings_tab()
 
         footer = ttk.Frame(self, style="TFrame", padding=(18, 0, 18, 10))
         footer.pack(fill="x")
@@ -1547,12 +2065,13 @@ class ThumbnailScraperApp(tk.Tk):
 
         custom_footer = ttk.Frame(self.custom_tab, style="Panel.TFrame")
         custom_footer.grid(row=3, column=0, sticky="ew", pady=(12, 0))
-        ttk.Button(
+        self.build_custom_art_button = ttk.Button(
             custom_footer,
             text="Build Custom Art",
             style="Accent.TButton",
             command=self.build_custom_rom_output,
-        ).pack(side="left")
+        )
+        self.build_custom_art_button.pack(side="left")
 
     def _build_exceptions_tab(self):
         ttk.Label(self.exceptions_tab, text="Per-game Exceptions", style="Section.TLabel").pack(anchor="w")
@@ -1574,33 +2093,258 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Button(self.exceptions_tab, text="Remove Selected", command=self.remove_exception).pack(anchor="w")
 
     def _build_settings_tab(self):
-        ttk.Label(self.settings_tab, text="Provider Credentials", style="Section.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(self.settings_tab, text="Provider Credentials", style="Section.TLabel").grid(
+            row=0, column=0, columnspan=3, sticky="w"
+        )
         fields = [
             ("Local pack folder", self.local_pack_var, "folder", False),
             ("IGDB Client ID", self.igdb_client_var, None, False),
-            ("IGDB access token", self.igdb_token_var, None, False),
-            ("TheGamesDB API key (automatic fallback)", self.tgdb_key_var, None, False),
-            ("ScreenScraper developer ID", self.ss_dev_id_var, None, False),
-            ("ScreenScraper developer password", self.ss_dev_pass_var, None, True),
-            ("ScreenScraper username", self.ss_user_var, None, False),
-            ("ScreenScraper password", self.ss_pass_var, None, True),
+            ("IGDB Client Secret", self.igdb_secret_var, "igdb_secret", True),
+            ("TheGamesDB API key (fallback #1)", self.tgdb_key_var, "thegamesdb", True),
+            ("ScreenScraper developer ID (fallback #2)", self.ss_dev_id_var, "screenscraper", False),
+            ("ScreenScraper developer password", self.ss_dev_pass_var, "ss_dev_pass", True),
+            ("ScreenScraper username (optional)", self.ss_user_var, None, False),
+            ("ScreenScraper password (optional)", self.ss_pass_var, "ss_pass", True),
         ]
         for row, (label, var, action, hidden) in enumerate(fields, start=1):
             ttk.Label(self.settings_tab, text=label).grid(row=row, column=0, sticky="w", pady=6)
-            ttk.Entry(self.settings_tab, textvariable=var, width=54, show="*" if hidden else "").grid(row=row, column=1, sticky="w", padx=(10, 8))
             if action == "folder":
-                ttk.Button(self.settings_tab, text="Browse", command=self.choose_local_pack).grid(row=row, column=2, sticky="w")
+                ttk.Entry(self.settings_tab, textvariable=var, width=54).grid(
+                    row=row, column=1, sticky="w", padx=(10, 8)
+                )
+                ttk.Button(self.settings_tab, text="Browse", command=self.choose_local_pack).grid(
+                    row=row, column=2, sticky="w"
+                )
+            elif action in {"thegamesdb", "igdb_secret", "ss_dev_pass", "ss_pass"}:
+                controls = ttk.Frame(self.settings_tab, style="Panel.TFrame")
+                controls.grid(row=row, column=1, sticky="w", padx=(10, 8))
+                entry = ttk.Entry(controls, textvariable=var, width=38, show="*" if hidden else "")
+                entry.pack(side="left")
+                reveal = ttk.Button(controls, text="Show", width=7)
+                reveal.pack(side="left", padx=(6, 0))
+                if action == "thegamesdb":
+                    self.tgdb_key_entry = entry
+                    self.tgdb_key_reveal_button = reveal
+                    reveal.configure(command=self.toggle_tgdb_key_visibility)
+                    self.tgdb_test_button = ttk.Button(
+                        self.settings_tab, text="Test key", command=self.test_thegamesdb_key
+                    )
+                    self.tgdb_test_button.grid(row=row, column=2, sticky="w")
+                elif action == "igdb_secret":
+                    self.igdb_secret_entry = entry
+                    self.igdb_secret_reveal_button = reveal
+                    reveal.configure(command=self.toggle_igdb_secret_visibility)
+                    self.igdb_test_button = ttk.Button(
+                        self.settings_tab, text="Test IGDB", command=self.test_igdb_credentials_gui
+                    )
+                    self.igdb_test_button.grid(row=row, column=2, sticky="w")
+                elif action == "ss_dev_pass":
+                    self.ss_dev_pass_entry = entry
+                    self.ss_dev_pass_reveal_button = reveal
+                    reveal.configure(command=self.toggle_ss_dev_pass_visibility)
+                else:
+                    self.ss_pass_entry = entry
+                    self.ss_pass_reveal_button = reveal
+                    reveal.configure(command=self.toggle_ss_pass_visibility)
+            else:
+                ttk.Entry(self.settings_tab, textvariable=var, width=54, show="*" if hidden else "").grid(
+                    row=row, column=1, sticky="w", padx=(10, 8)
+                )
+                if action == "screenscraper":
+                    self.ss_test_button = ttk.Button(
+                        self.settings_tab, text="Test ScreenScraper", command=self.test_screenscraper_credentials_gui
+                    )
+                    self.ss_test_button.grid(row=row, column=2, sticky="w")
+
+        help_row = len(fields) + 1
         ttk.Label(
             self.settings_tab,
-            text="ScreenScraper is an advanced provider and requires developer credentials from ScreenScraper as well as a user account.",
+            text=(
+                "Automatic fallback order: Libretro → TheGamesDB → ScreenScraper → IGDB. "
+                "IGDB uses Twitch Client ID + Client Secret (the app requests/refreshes its own access token). "
+                "ScreenScraper requires developer credentials; user account credentials are optional, but must be entered together. "
+                "Providers without valid credentials or a matching platform are skipped."
+            ),
             style="Muted.TLabel",
-            wraplength=620,
-        ).grid(row=len(fields) + 1, column=1, sticky="w", pady=(8, 0), padx=(10, 8))
-        ttk.Button(self.settings_tab, text="Save Settings", style="Accent.TButton", command=self.save_settings).grid(row=len(fields) + 2, column=1, sticky="w", pady=(16, 0))
+            wraplength=700,
+        ).grid(row=help_row, column=1, columnspan=2, sticky="w", pady=(8, 0), padx=(10, 8))
+        actions = ttk.Frame(self.settings_tab, style="Panel.TFrame")
+        actions.grid(row=help_row + 1, column=1, columnspan=2, sticky="w", pady=(16, 0), padx=(10, 8))
+        ttk.Button(
+            actions,
+            text="Get TheGamesDB API key",
+            command=lambda: webbrowser.open("https://thegamesdb.net/?tab=api"),
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            actions,
+            text="Get IGDB credentials",
+            command=lambda: webbrowser.open("https://dev.twitch.tv/console/apps"),
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            actions,
+            text="ScreenScraper API access",
+            command=lambda: webbrowser.open("https://www.screenscraper.fr/webapi2.php"),
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(actions, text="Save Settings", style="Accent.TButton", command=self.save_settings).pack(side="left")
+
+    def toggle_tgdb_key_visibility(self):
+        if not self.tgdb_key_entry or not self.tgdb_key_reveal_button:
+            return
+        self.tgdb_key_visible = not self.tgdb_key_visible
+        self.tgdb_key_entry.configure(show="" if self.tgdb_key_visible else "*")
+        self.tgdb_key_reveal_button.configure(text="Hide" if self.tgdb_key_visible else "Show")
+
+    def toggle_igdb_secret_visibility(self):
+        if not self.igdb_secret_entry or not self.igdb_secret_reveal_button:
+            return
+        self.igdb_secret_visible = not self.igdb_secret_visible
+        self.igdb_secret_entry.configure(show="" if self.igdb_secret_visible else "*")
+        self.igdb_secret_reveal_button.configure(text="Hide" if self.igdb_secret_visible else "Show")
+
+    def toggle_ss_dev_pass_visibility(self):
+        if not self.ss_dev_pass_entry or not self.ss_dev_pass_reveal_button:
+            return
+        self.ss_dev_pass_visible = not self.ss_dev_pass_visible
+        self.ss_dev_pass_entry.configure(show="" if self.ss_dev_pass_visible else "*")
+        self.ss_dev_pass_reveal_button.configure(text="Hide" if self.ss_dev_pass_visible else "Show")
+
+    def toggle_ss_pass_visibility(self):
+        if not self.ss_pass_entry or not self.ss_pass_reveal_button:
+            return
+        self.ss_pass_visible = not self.ss_pass_visible
+        self.ss_pass_entry.configure(show="" if self.ss_pass_visible else "*")
+        self.ss_pass_reveal_button.configure(text="Hide" if self.ss_pass_visible else "Show")
+
+    def test_thegamesdb_key(self):
+        if self.tgdb_test_progress_window is not None:
+            return
+        api_key = self.tgdb_key_var.get().strip()
+        if not api_key:
+            messagebox.showinfo(APP_NAME, "Enter your TheGamesDB API key first.")
+            return
+        try:
+            self.save_settings()
+        except OSError as exc:
+            messagebox.showwarning(APP_NAME, f"Could not save settings before testing the key:\n{exc}")
+            return
+        self.tgdb_test_button.configure(state="disabled")
+        self.tgdb_test_progress_window = OperationProgressWindow(
+            self, "Test TheGamesDB API Key", "Contacting TheGamesDB to verify the key..."
+        )
+
+        def worker():
+            try:
+                platform_count = self.providers.test_thegamesdb_api_key(api_key)
+                self.after(0, lambda count=platform_count: self.finish_thegamesdb_key_test(count, None))
+            except Exception as exc:
+                self.after(0, lambda error=exc: self.finish_thegamesdb_key_test(0, error))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_thegamesdb_key_test(self, platform_count: int, error: Exception | None):
+        self.close_operation_progress("tgdb_test_progress_window")
+        if self.tgdb_test_button:
+            self.tgdb_test_button.configure(state="normal")
+        if error is None:
+            self.status_var.set("TheGamesDB API key verified.")
+            messagebox.showinfo(APP_NAME, f"TheGamesDB API key works. Retrieved {platform_count} platforms.")
+        else:
+            self.status_var.set("TheGamesDB API key test failed.")
+            messagebox.showwarning(APP_NAME, f"Could not verify TheGamesDB API key:\n{error}")
+
+    def test_igdb_credentials_gui(self):
+        if self.igdb_test_progress_window is not None:
+            return
+        if not self.igdb_client_var.get().strip() or not self.igdb_secret_var.get().strip():
+            messagebox.showinfo(APP_NAME, "Enter your IGDB/Twitch Client ID and Client Secret first.")
+            return
+        self._start_provider_credential_test(
+            "IGDB",
+            "igdb_test_progress_window",
+            self.igdb_test_button,
+            self.providers.test_igdb_credentials,
+        )
+
+    def test_screenscraper_credentials_gui(self):
+        if self.ss_test_progress_window is not None:
+            return
+        if not self.ss_dev_id_var.get().strip() or not self.ss_dev_pass_var.get().strip():
+            messagebox.showinfo(APP_NAME, "Enter your ScreenScraper developer ID and developer password first.")
+            return
+        self._start_provider_credential_test(
+            "ScreenScraper",
+            "ss_test_progress_window",
+            self.ss_test_button,
+            self.providers.test_screenscraper_credentials,
+        )
+
+    def _start_provider_credential_test(self, provider_name, window_attribute, button, test_call):
+        try:
+            self.save_settings()
+        except OSError as exc:
+            messagebox.showwarning(APP_NAME, f"Could not save settings before testing {provider_name}:\n{exc}")
+            return
+        if button is not None:
+            button.configure(state="disabled")
+        setattr(
+            self,
+            window_attribute,
+            OperationProgressWindow(self, f"Test {provider_name} Credentials", f"Contacting {provider_name}..."),
+        )
+
+        def worker():
+            try:
+                count = test_call()
+                self.after(0, lambda count=count: self.finish_provider_credential_test(
+                    provider_name, window_attribute, button, count, None
+                ))
+            except Exception as exc:
+                self.after(0, lambda error=exc: self.finish_provider_credential_test(
+                    provider_name, window_attribute, button, 0, error
+                ))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_provider_credential_test(self, provider_name, window_attribute, button, count: int, error: Exception | None):
+        self.close_operation_progress(window_attribute)
+        if button is not None:
+            button.configure(state="normal")
+        if error is None:
+            self.status_var.set(f"{provider_name} credentials verified.")
+            messagebox.showinfo(APP_NAME, f"{provider_name} credentials work. Retrieved {count} platform/system records.")
+        else:
+            self.status_var.set(f"{provider_name} credential test failed.")
+            messagebox.showwarning(APP_NAME, f"Could not verify {provider_name} credentials:\n{error}")
 
     def log(self, text: str):
         self.status_var.set(text)
         self.update_idletasks()
+
+    def queue_operation_progress(
+        self,
+        window_attribute: str,
+        heading: str,
+        current: int | None = None,
+        total: int | None = None,
+        detail: str = "",
+    ):
+        """Queue progress updates from worker threads onto Tk's main thread."""
+        def update():
+            window = getattr(self, window_attribute, None)
+            if window is not None:
+                window.update_progress(heading, current, total, detail)
+            self.status_var.set(f"{heading} — {detail}" if detail else heading)
+
+        try:
+            self.after(0, update)
+        except tk.TclError:
+            pass
+
+    def close_operation_progress(self, window_attribute: str):
+        window = getattr(self, window_attribute, None)
+        if window is not None:
+            window.close()
+            setattr(self, window_attribute, None)
 
     def set_build_progress(self, value: float | None = None, text: str | None = None, output: str | None = None):
         def update():
@@ -1877,7 +2621,7 @@ class ThumbnailScraperApp(tk.Tk):
                 self.current_source_image = image
                 self.after(0, self.refresh_result_gallery)
             except Exception as exc:
-                self.after(0, lambda: messagebox.showwarning(APP_NAME, str(exc)))
+                self.after(0, lambda error=exc: messagebox.showwarning(APP_NAME, str(error)))
                 self.status_var.set("Preview failed.")
             finally:
                 self.after(0, lambda: self.set_preview_loading(False))
@@ -1910,7 +2654,7 @@ class ThumbnailScraperApp(tk.Tk):
                 self.build_source_image = image
                 self.after(0, self.update_build_preview)
             except Exception as exc:
-                self.after(0, lambda: messagebox.showwarning(APP_NAME, str(exc)))
+                self.after(0, lambda error=exc: messagebox.showwarning(APP_NAME, str(error)))
                 self.status_var.set("Build preview failed.")
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2136,19 +2880,37 @@ class ThumbnailScraperApp(tk.Tk):
         self.scan_running = True
         self.scan_sd_button.configure(state="disabled")
         self.status_var.set("Scanning the SD card for supported games...")
+        self.sd_scan_progress_window = OperationProgressWindow(
+            self,
+            "Scan SD Card",
+            "Scanning folders on the SD card...",
+        )
+
+        def report_progress(heading, current=None, total=None, detail=""):
+            self.queue_operation_progress(
+                "sd_scan_progress_window", heading, current, total, detail
+            )
 
         def worker():
             try:
-                result = self._scan_sd_worker(root, source, size_names, include_gba)
+                result = self._scan_sd_worker(
+                    root,
+                    source,
+                    size_names,
+                    include_gba,
+                    progress_callback=report_progress,
+                )
                 self.after(0, lambda: self.finish_sd_scan(result))
             except Exception as exc:
                 self.after(0, lambda error=exc: self.fail_sd_scan(error))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def supported_files_on_sd(self, root: Path, include_gba: bool) -> list[tuple[Path, str]]:
+    def supported_files_on_sd(self, root: Path, include_gba: bool, progress_callback=None) -> list[tuple[Path, str]]:
         found: list[tuple[Path, str]] = []
+        folders_visited = 0
         for current, directories, filenames in os.walk(root):
+            folders_visited += 1
             directories[:] = [
                 name
                 for name in directories
@@ -2165,17 +2927,45 @@ class ThumbnailScraperApp(tk.Tk):
                 if path.name.casefold() in {"ezkernel.bin", "ezkernelnew.bin"}:
                     continue
                 found.append((path, system))
+            if progress_callback and (folders_visited == 1 or folders_visited % 8 == 0):
+                progress_callback(
+                    "Scanning SD card folders",
+                    None,
+                    None,
+                    f"Folders visited: {folders_visited:,}; supported ROMs found: {len(found):,}",
+                )
+        if progress_callback:
+            progress_callback(
+                "SD card folder scan complete",
+                1,
+                1,
+                f"Found {len(found):,} supported ROM files in {folders_visited:,} folders.",
+            )
         return sorted(found, key=lambda item: str(item[0]).casefold())
 
     def sd_scan_cache_path(self, source_folder: str, system: str, art_name: str) -> Path:
         """Stable on-disk cache path for an artwork source match.
 
-        The key includes the system and Libretro artwork folder so the same title
+        The key includes the system and provider/art folder so the same title
         can have distinct cached box art, screenshots, and title screens.
         """
         identity = f"{system.casefold()}\0{source_folder.casefold()}\0{art_name.casefold()}"
         digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
         return self.base_dir / CACHE_FOLDER_NAME / "SD scan artwork" / f"{digest}.png"
+
+    def sd_scan_rom_cache_path(self, source_folder: str, system: str, relative_rom_path: str) -> Path:
+        """Return the durable per-ROM source-image cache path.
+
+        This lookup key is available before asking any online artwork provider,
+        so a previous scan can reuse a cached image even if a provider is now
+        unavailable or the provider's search result ordering has changed.
+        """
+        identity = (
+            f"{system.casefold()}\0{source_folder.casefold()}\0"
+            f"{relative_rom_path.replace(chr(92), '/').casefold()}"
+        )
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+        return self.base_dir / CACHE_FOLDER_NAME / "SD scan ROM artwork" / f"{digest}.png"
 
     def sd_thumbnail_output_roots(self, root: Path, size: str) -> list[Path]:
         """Return the possible existing output directories for one size.
@@ -2238,13 +3028,8 @@ class ThumbnailScraperApp(tk.Tk):
                 temporary.replace(cache_path)
         return str(cache_path)
 
-    def ask_sd_download_retry_skip(self, system: str, art_name: str, error: Exception | str) -> str:
-        """Ask on the Tk main thread whether a failed image should be retried/skipped.
-
-        SD scanning runs in a worker thread, so this schedules the modal dialog on
-        the UI thread and waits for the explicit user choice. Closing the dialog
-        is treated as Skip to avoid leaving the scan worker blocked.
-        """
+    def ask_sd_download_fallback_skip(self, system: str, art_name: str, error: Exception | str) -> str:
+        """Prompt whether to try the next artwork provider or skip this image."""
         completed = threading.Event()
         answer = {"choice": "skip"}
         detail = str(error).strip() or "The provider returned invalid image data."
@@ -2255,20 +3040,23 @@ class ThumbnailScraperApp(tk.Tk):
             dialog = None
             try:
                 dialog = tk.Toplevel(self)
-                dialog.title("Artwork Download Failed")
+                dialog.title("Artwork Image Unavailable")
                 dialog.configure(bg="#152235")
                 dialog.transient(self)
                 dialog.resizable(False, False)
                 dialog.columnconfigure(0, weight=1)
                 ttk.Label(
                     dialog,
-                    text=f"Could not download artwork for {display_libretro_name(art_name)}\nSystem: {system}",
+                    text=f"Could not download usable artwork for {display_libretro_name(art_name)}\nSystem: {system}",
                     style="Section.TLabel",
                     wraplength=430,
                 ).grid(row=0, column=0, sticky="w", padx=18, pady=(18, 8))
                 ttk.Label(
                     dialog,
-                    text=f"Error: {detail}\n\nWould you like to retry this image or skip it and continue scanning?",
+                    text=(
+                        f"Error: {detail}\n\nTry the next configured artwork provider?\n"
+                        "Fallback order: TheGamesDB → ScreenScraper → IGDB."
+                    ),
                     style="Muted.TLabel",
                     wraplength=430,
                 ).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 16))
@@ -2291,9 +3079,9 @@ class ThumbnailScraperApp(tk.Tk):
                 )
                 ttk.Button(
                     buttons,
-                    text="Retry Download",
+                    text="Try Fallback",
                     style="Accent.TButton",
-                    command=lambda: finish("retry"),
+                    command=lambda: finish("fallback"),
                 ).pack(side="right")
                 dialog.grab_set()
                 dialog.focus_force()
@@ -2320,8 +3108,20 @@ class ThumbnailScraperApp(tk.Tk):
         source: str,
         size_names: list[str],
         include_gba: bool,
+        progress_callback=None,
     ) -> dict:
-        files = self.supported_files_on_sd(root, include_gba)
+        def report(heading, current=None, total=None, detail=""):
+            if progress_callback:
+                progress_callback(heading, current, total, detail)
+
+        report("Scanning SD card folders", None, None, str(root))
+        files = self.supported_files_on_sd(
+            root,
+            include_gba,
+            progress_callback=lambda heading, current=None, total=None, detail="": report(
+                heading, current, total, detail
+            ),
+        )
         folder = LIBRETRO_SOURCE_FOLDERS.get(source, "Named_Boxarts")
         existing_items: dict[tuple[str, str], tuple[int, CustomRomItem]] = {}
         existing_items_by_relative: dict[str, list[tuple[int, CustomRomItem]]] = {}
@@ -2337,6 +3137,13 @@ class ThumbnailScraperApp(tk.Tk):
         seen_targets: set[str] = set()
 
         for number, (path, system) in enumerate(files, start=1):
+            if number == 1 or number % 10 == 0 or number == len(files):
+                report(
+                    "Matching installed games against Libretro",
+                    number,
+                    max(1, len(files)),
+                    f"{system}: {path.name}",
+                )
             if number == 1 or number % 20 == 0:
                 self.after(
                     0,
@@ -2358,11 +3165,10 @@ class ThumbnailScraperApp(tk.Tk):
             if target_key in seen_targets:
                 continue
             seen_targets.add(target_key)
-            try:
-                art_name = self.providers.find_libretro_art_name(target_name, system, folder)
-            except Exception:
-                art_name = None
-            candidates.append(SdRomCandidate(path, system, target_name, relative, art_name))
+            # Defer all provider matching until after existing thumbnails and
+            # per-ROM cached source images have been checked. Candidate discovery
+            # itself must not contact online artwork services.
+            candidates.append(SdRomCandidate(path, system, target_name, relative, None))
 
         # Resolve candidate directories once per size; thousands of ROMs should
         # not trigger thousands of repeated directory listings.
@@ -2377,7 +3183,14 @@ class ThumbnailScraperApp(tk.Tk):
         needed_sizes: dict[str, set[str]] = {}
         updates: dict[int, str] = {}
         skipped_existing = 0
-        for candidate in candidates:
+        for index, candidate in enumerate(candidates, start=1):
+            if index == 1 or index % 10 == 0 or index == len(candidates):
+                report(
+                    "Checking for existing thumbnails",
+                    index,
+                    max(1, len(candidates)),
+                    candidate.path.name,
+                )
             target_key = candidate.relative.casefold()
             missing: set[str] = set()
             for size in size_names:
@@ -2401,30 +3214,93 @@ class ThumbnailScraperApp(tk.Tk):
                 needed_sizes[target_key] = missing
 
         matches: list[SdArtworkMatch] = []
-        tgdb_key_var = self.__dict__.get("tgdb_key_var")
-        tgdb_key_available = bool(tgdb_key_var and tgdb_key_var.get().strip())
-        for candidate in candidates:
+        candidates_by_relative = {candidate.relative.casefold(): candidate for candidate in candidates}
+        pre_cache_hits = 0
+        for index, candidate in enumerate(candidates, start=1):
+            if index == 1 or index % 5 == 0 or index == len(candidates):
+                report(
+                    "Checking cached artwork before providers",
+                    index,
+                    max(1, len(candidates)),
+                    f"{candidate.system}: {candidate.path.name}",
+                )
             target_key = candidate.relative.casefold()
-            art_name = candidate.libretro_art_name
+            # Existing IMGS/IMGS2 and completed entries were checked above. If
+            # nothing needs work for this ROM, do not even query Libretro's index.
+            if not needed_sizes.get(target_key):
+                continue
+
+            # First reuse a saved Custom Art source image associated with this ROM.
+            # The custom-list image path can survive upgrades from older versions.
+            cached_data = b""
+            for _item_index, cached_item in existing_items_by_relative.get(target_key, []):
+                cached_path = Path(cached_item.image_path) if cached_item.image_path else None
+                if cached_path and is_valid_image_file(cached_path):
+                    try:
+                        candidate_data = cached_path.read_bytes()
+                        if is_valid_image_data(candidate_data):
+                            cached_data = candidate_data
+                            break
+                    except OSError:
+                        pass
+
+            # Next check the persistent cache keyed directly by ROM path. This
+            # happens before find_libretro_art_name or any provider search.
+            rom_cache_path = self.sd_scan_rom_cache_path(folder, candidate.system, candidate.relative)
+            if not cached_data and is_valid_image_file(rom_cache_path):
+                try:
+                    candidate_data = rom_cache_path.read_bytes()
+                    if is_valid_image_data(candidate_data):
+                        cached_data = candidate_data
+                    else:
+                        rom_cache_path.unlink(missing_ok=True)
+                except OSError:
+                    cached_data = b""
+            if cached_data:
+                cache_tag = hashlib.sha256(target_key.encode("utf-8")).hexdigest()[:10]
+                matches.append(
+                    SdArtworkMatch(
+                        candidate.path,
+                        candidate.system,
+                        f"{candidate.title} [rom-cache-{cache_tag}]",
+                        candidate.relative,
+                        "Cached",
+                        cached_data,
+                    )
+                )
+                pre_cache_hits += 1
+                continue
+
+            # No usable local source image exists: only now ask the online providers.
+            try:
+                art_name = self.providers.find_libretro_art_name(candidate.title, candidate.system, folder)
+            except Exception:
+                art_name = None
+            candidate.libretro_art_name = art_name
             if art_name:
                 matches.append(
                     SdArtworkMatch(candidate.path, candidate.system, art_name, candidate.relative, "Libretro")
                 )
                 continue
-            # If no new thumbnail is needed, don't make a fallback API request.
-            if not needed_sizes.get(target_key):
-                continue
-            if not tgdb_key_available:
-                unmatched.append(
-                    f"{candidate.system}: {candidate.path.name} (no Libretro match; add a TheGamesDB API key in Settings for fallback)"
-                )
-                continue
             try:
-                fallback = self.providers.search_thegamesdb_many(
-                    candidate.title, max_results=1, system=candidate.system
-                )
+                fallback_search = getattr(self.providers, "search_fallback_many", None)
+                if callable(fallback_search):
+                    fallback = fallback_search(
+                        candidate.title,
+                        max_results=1,
+                        system=candidate.system,
+                        after_provider="Libretro",
+                    )
+                else:
+                    # Compatibility path for older embedders/test doubles.
+                    tgdb_key_var = self.__dict__.get("tgdb_key_var")
+                    if not (tgdb_key_var and tgdb_key_var.get().strip()):
+                        raise LookupError("No Libretro match; add a TheGamesDB API key in Settings for fallback.")
+                    fallback = self.providers.search_thegamesdb_many(
+                        candidate.title, max_results=1, system=candidate.system
+                    )
                 if not fallback or not is_valid_image_data(fallback[0].image_data):
-                    raise LookupError("TheGamesDB returned no usable box art")
+                    raise LookupError("No fallback provider returned usable image data")
                 result = fallback[0]
                 matches.append(
                     SdArtworkMatch(
@@ -2432,12 +3308,12 @@ class ThumbnailScraperApp(tk.Tk):
                         candidate.system,
                         result.label,
                         candidate.relative,
-                        "TheGamesDB",
+                        result.provider,
                         result.image_data,
                     )
                 )
             except Exception as exc:
-                unmatched.append(f"{candidate.system}: {candidate.path.name} (TheGamesDB fallback: {exc})")
+                unmatched.append(f"{candidate.system}: {candidate.path.name} (provider fallback chain: {exc})")
 
         # Cache identity includes the provider, console and Libretro art folder.
         # The same title can therefore have separate images from each provider.
@@ -2453,7 +3329,7 @@ class ThumbnailScraperApp(tk.Tk):
         downloaded: dict[tuple[str, str, str], bytes] = {}
         cache_paths: dict[tuple[str, str, str], Path] = {}
         download_errors: list[str] = []
-        cache_hits = 0
+        cache_hits = pre_cache_hits
         # Previous scraper versions cached source images as CustomRomItem paths.
         prior_item_cache_by_art: dict[tuple[str, str, str], Path] = {}
         for match in matches:
@@ -2465,11 +3341,31 @@ class ThumbnailScraperApp(tk.Tk):
                     prior_item_cache_by_art.setdefault(key, Path(item.image_path))
                     break
 
-        for key in sorted(needed_art):
+        for cache_index, key in enumerate(sorted(needed_art), start=1):
+            if cache_index == 1 or cache_index % 5 == 0 or cache_index == len(needed_art):
+                report(
+                    "Checking cached artwork",
+                    cache_index,
+                    max(1, len(needed_art)),
+                    f"{key[1]}: {display_libretro_name(key[2])}",
+                )
             provider, system, art_name = key
-            cache_source = folder if provider == "Libretro" else "TheGamesDB"
+            cache_source = folder if provider == "Libretro" else provider
             cache_path = self.sd_scan_cache_path(cache_source, system, art_name)
             cache_paths[key] = cache_path
+            match = matches_by_art[key]
+            if provider == "Cached" and match.image_data:
+                # The per-ROM cache was already checked before any provider query.
+                # Populate the general source cache for compatibility with older
+                # paths, while counting only the original per-ROM hit above.
+                try:
+                    self.cache_sd_scan_image(cache_path, match.image_data)
+                    downloaded[key] = cache_path.read_bytes()
+                except Exception as exc:
+                    download_errors.append(
+                        f"{system}: {display_libretro_name(art_name)} (cache write failed: {exc})"
+                    )
+                continue
             if is_valid_image_file(cache_path):
                 try:
                     cached_data = cache_path.read_bytes()
@@ -2503,10 +3399,10 @@ class ThumbnailScraperApp(tk.Tk):
                 except OSError:
                     pass
 
-            # TheGamesDB search already downloaded and validated its selected
-            # image. Persist those bytes directly; don't fetch the same URL again.
+            # Fallback searches already downloaded and validated their selected
+            # image. Persist those bytes directly; don't fetch the URL again.
             match = matches_by_art[key]
-            if match.provider == "TheGamesDB" and match.image_data:
+            if match.provider != "Libretro" and match.image_data:
                 data = match.image_data
                 downloaded[key] = data
                 try:
@@ -2522,35 +3418,69 @@ class ThumbnailScraperApp(tk.Tk):
         # carry their validated image bytes already.
         to_download = {key for key in to_download if key[0] == "Libretro"}
         if to_download:
-            self.after(0, lambda count=len(to_download): self.status_var.set(f"Downloading {count} uncached Libretro images..."))
+            report(
+                "Downloading uncached artwork",
+                0,
+                len(to_download),
+                f"{len(to_download):,} images to download",
+            )
             with ThreadPoolExecutor(max_workers=8) as executor:
                 future_to_art = {
                     executor.submit(http_get, libretro_raw_url(system, folder, art_name)): key
                     for key in sorted(to_download)
                     for _provider, system, art_name in [key]
                 }
-                for future in as_completed(future_to_art):
+                for download_index, future in enumerate(as_completed(future_to_art), start=1):
                     key = future_to_art[future]
                     _provider, system, art_name = key
                     url = libretro_raw_url(system, folder, art_name)
-                    first_attempt = True
-                    while True:
-                        try:
-                            if first_attempt:
-                                first_attempt = False
-                                data = future.result()
-                            else:
-                                data = http_get(url)
-                            if not is_valid_image_data(data):
-                                raise ValueError("Provider returned invalid or incomplete image data")
-                        except Exception as exc:
-                            action = self.ask_sd_download_retry_skip(system, art_name, exc)
-                            if action == "retry":
+                    report(
+                        "Downloading uncached artwork",
+                        download_index,
+                        len(future_to_art),
+                        f"{system}: {display_libretro_name(art_name)}",
+                    )
+                    try:
+                        data = future.result()
+                        if not is_valid_image_data(data):
+                            raise ValueError("Provider returned invalid or incomplete image data")
+                    except Exception as exc:
+                        action = self.ask_sd_download_fallback_skip(system, art_name, exc)
+                        if action == "fallback":
+                            candidate = candidates_by_relative.get(matches_by_art[key].relative.casefold())
+                            query = candidate.title if candidate else Path(art_name).stem
+                            try:
+                                fallback = self.providers.search_fallback_many(
+                                    query,
+                                    max_results=1,
+                                    system=system,
+                                    after_provider="Libretro",
+                                    prior_errors=[f"Libretro image download: {exc}"],
+                                )
+                                if not fallback or not is_valid_image_data(fallback[0].image_data):
+                                    raise LookupError("No fallback provider returned usable image data")
+                                data = fallback[0].image_data
+                                downloaded[key] = data
+                                cache_path = cache_paths[key]
+                                self.cache_sd_scan_image(cache_path, data)
+                                downloaded[key] = cache_path.read_bytes()
+                                report(
+                                    f"Artwork recovered from {fallback[0].provider}",
+                                    download_index,
+                                    len(future_to_art),
+                                    f"{system}: {query}",
+                                )
+                            except Exception as fallback_error:
+                                download_errors.append(
+                                    f"{system}: {display_libretro_name(art_name)} (fallback failed: {fallback_error})"
+                                )
                                 continue
+                        else:
                             download_errors.append(
                                 f"{system}: {display_libretro_name(art_name)} (skipped after download error: {exc})"
                             )
-                            break
+                            continue
+                    else:
                         downloaded[key] = data
                         try:
                             cache_path = cache_paths[key]
@@ -2560,11 +3490,17 @@ class ThumbnailScraperApp(tk.Tk):
                             download_errors.append(
                                 f"{system}: {display_libretro_name(art_name)} (cache write failed: {exc})"
                             )
-                        break
 
         additions: list[CustomRomItem] = []
         matched_files = len(matches)
-        for match in matches:
+        for match_index, match in enumerate(matches, start=1):
+            if match_index == 1 or match_index % 10 == 0 or match_index == len(matches):
+                report(
+                    "Preparing Custom Art entries",
+                    match_index,
+                    max(1, len(matches)),
+                    f"{match.system}: {match.path.name}",
+                )
             relative_key = match.relative.casefold()
             if not needed_sizes.get(relative_key):
                 continue
@@ -2572,8 +3508,23 @@ class ThumbnailScraperApp(tk.Tk):
             data = downloaded.get(key_art)
             if not data:
                 continue
-            cache_source = folder if match.provider == "Libretro" else "TheGamesDB"
-            image_path = str(cache_paths.get(key_art) or self.sd_scan_cache_path(cache_source, match.system, match.art_name))
+            # Persist the selected source image by ROM identity, independent of
+            # provider name/label. The next scan checks this before online lookup.
+            rom_cache_path = self.sd_scan_rom_cache_path(folder, match.system, match.relative)
+            try:
+                self.cache_sd_scan_image(rom_cache_path, data)
+            except Exception as exc:
+                download_errors.append(
+                    f"{match.system}: {match.path.name} (per-ROM cache write failed: {exc})"
+                )
+            cache_source = folder if match.provider == "Libretro" else match.provider
+            provider_cache_path = cache_paths.get(key_art) or self.sd_scan_cache_path(
+                cache_source, match.system, match.art_name
+            )
+            # Custom entries point at the per-ROM cache so subsequent scans can
+            # reuse the exact image before querying providers, even if providers
+            # later rename or remove their search result.
+            image_path = str(rom_cache_path if is_valid_image_file(rom_cache_path) else provider_cache_path)
             # Cache paths are persistent and deterministic. If writing there
             # failed, make a best effort to keep a temporary source image cache.
             if not is_valid_image_file(image_path):
@@ -2614,6 +3565,7 @@ class ThumbnailScraperApp(tk.Tk):
         }
 
     def finish_sd_scan(self, result: dict):
+        self.close_operation_progress("sd_scan_progress_window")
         additions = result["additions"]
         for index, image_path in result.get("updates", {}).items():
             if 0 <= index < len(self.custom_roms):
@@ -2629,6 +3581,7 @@ class ThumbnailScraperApp(tk.Tk):
         self.show_sd_scan_results(result)
 
     def fail_sd_scan(self, error: Exception):
+        self.close_operation_progress("sd_scan_progress_window")
         self.scan_running = False
         self.scan_sd_button.configure(state="normal")
         self.status_var.set("SD scan failed.")
@@ -2949,6 +3902,8 @@ class ThumbnailScraperApp(tk.Tk):
             self.custom_preview_info.configure(text=f"Could not preview image: {exc}")
 
     def build_custom_rom_output(self):
+        if self.custom_build_running:
+            return
         if not self.custom_roms:
             messagebox.showinfo(APP_NAME, "Add custom entries first.")
             return
@@ -2961,16 +3916,16 @@ class ThumbnailScraperApp(tk.Tk):
         mirror_entries: dict[int, str] = {}
         custom_entries: dict[str, set[str]] = {"80x80": set(), "120x80": set()}
         destinations: dict[tuple[str, str], str] = {}
+        tasks = []
         try:
-            # Decide destinations before writing anything. This catches collisions
-            # in legacy CUSTOM mode, where folder paths are deliberately flattened.
+            # Validate all destinations before doing any disk writes. This catches
+            # collisions in legacy CUSTOM mode before the progress window opens.
             for index, item in enumerate(self.custom_roms):
                 relative = self.custom_art_relative_path(item) if layout == "Mirror ROM folders" else ""
                 if relative:
                     mirror_entries[index] = relative
-                else:
-                    if not self.is_extension_default_name(item.new_code):
-                        custom_entries[item.size].add(item.new_code.casefold())
+                elif not self.is_extension_default_name(item.new_code):
+                    custom_entries[item.size].add(item.new_code.casefold())
 
             over_limit = [size for size, names in custom_entries.items() if len(names) > 256]
             if over_limit:
@@ -2986,10 +3941,10 @@ class ThumbnailScraperApp(tk.Tk):
             for index, item in enumerate(self.custom_roms):
                 _w, _h, folder_name = self.size_details(item.size)
                 if index in mirror_entries:
-                    output_path = mirrored_thumbnail_path(Path(folder_name), mirror_entries[index])
+                    relative_target = mirrored_thumbnail_path(Path(folder_name), mirror_entries[index])
                 else:
-                    output_path = output_path_for_custom_name(Path(folder_name), item.new_code)
-                identity = (item.size, str(output_path).casefold())
+                    relative_target = output_path_for_custom_name(Path(folder_name), item.new_code)
+                identity = (item.size, str(relative_target).casefold())
                 if identity in destinations:
                     messagebox.showwarning(
                         APP_NAME,
@@ -2999,28 +3954,105 @@ class ThumbnailScraperApp(tk.Tk):
                     )
                     return
                 destinations[identity] = item.new_code
-
-            run_dir = self.output_run_dir()
-            made_mirrored = 0
-            made_custom = 0
-            for index, item in enumerate(self.custom_roms):
-                thumb_name = validate_custom_art_name(item.new_code)
-                with Image.open(item.image_path) as source_image:
-                    w, h, folder_name = self.size_details(item.size)
-                    imgs_dir = run_dir / folder_name
-                    thumb = crop_image(source_image, (w, h), self.crop_from_dict(item.crop))
-                    if index in mirror_entries:
-                        target = mirrored_thumbnail_path(imgs_dir, mirror_entries[index])
-                        made_mirrored += 1
-                    else:
-                        target = output_path_for_custom_name(imgs_dir, thumb_name)
-                        made_custom += 1
-                    write_ezflash_bmp(thumb, target)
-            self.status_var.set(f"Custom art output created: {run_dir}")
-            extra = f"\nMirrored files: {made_mirrored}; CUSTOM files: {made_custom}." if layout == "Mirror ROM folders" else "\nOutput layout: legacy CUSTOM."
-            messagebox.showinfo(APP_NAME, f"Custom art output created:\n{run_dir}{extra}")
+                w, h, _folder = self.size_details(item.size)
+                tasks.append(
+                    {
+                        "image_path": str(item.image_path),
+                        "name": validate_custom_art_name(item.new_code),
+                        "size": item.size,
+                        "width": w,
+                        "height": h,
+                        "target_relative": relative_target.as_posix(),
+                        "crop": asdict(self.crop_from_dict(item.crop)),
+                        "mirrored": index in mirror_entries,
+                    }
+                )
         except Exception as exc:
             messagebox.showwarning(APP_NAME, str(exc))
+            return
+
+        self.custom_build_running = True
+        self.build_custom_art_button.configure(state="disabled")
+        self.custom_art_progress_window = OperationProgressWindow(
+            self,
+            "Build Custom Art",
+            f"Preparing to build {len(tasks):,} thumbnail(s)...",
+        )
+
+        def worker():
+            run_dir = None
+            made_mirrored = 0
+            made_custom = 0
+            try:
+                run_dir = self.output_run_dir()
+                total = len(tasks)
+                for index, task in enumerate(tasks, start=1):
+                    self.queue_operation_progress(
+                        "custom_art_progress_window",
+                        f"Building thumbnail {index:,} of {total:,}",
+                        index - 1,
+                        total,
+                        f"{task['name']}  →  {task['target_relative']}",
+                    )
+                    with Image.open(task["image_path"]) as source_image:
+                        thumb = crop_image(
+                            source_image,
+                            (task["width"], task["height"]),
+                            CropSettings(**task["crop"]),
+                        )
+                        target = run_dir / Path(task["target_relative"])
+                        write_ezflash_bmp(thumb, target)
+                    if task["mirrored"]:
+                        made_mirrored += 1
+                    else:
+                        made_custom += 1
+                    self.queue_operation_progress(
+                        "custom_art_progress_window",
+                        f"Building thumbnail {index:,} of {total:,}",
+                        index,
+                        total,
+                        f"Created {task['name']}  →  {task['target_relative']}",
+                    )
+                self.after(
+                    0,
+                    lambda result_dir=run_dir, mirrored=made_mirrored, custom=made_custom: self.finish_custom_art_output(
+                        result_dir, mirrored, custom, layout, None
+                    ),
+                )
+            except Exception as exc:
+                self.after(
+                    0,
+                    lambda error=exc, result_dir=run_dir, mirrored=made_mirrored, custom=made_custom: self.finish_custom_art_output(
+                        result_dir, mirrored, custom, layout, error
+                    ),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_custom_art_output(
+        self,
+        run_dir: Path | None,
+        made_mirrored: int,
+        made_custom: int,
+        layout: str,
+        error: Exception | None,
+    ):
+        self.close_operation_progress("custom_art_progress_window")
+        self.custom_build_running = False
+        if hasattr(self, "build_custom_art_button"):
+            self.build_custom_art_button.configure(state="normal")
+        if error is not None:
+            self.status_var.set("Custom art build failed.")
+            partial = f"\n\nPartial output may be available at:\n{run_dir}" if run_dir else ""
+            messagebox.showwarning(APP_NAME, f"Could not build custom artwork:\n{error}{partial}")
+            return
+        self.status_var.set(f"Custom art output created: {run_dir}")
+        extra = (
+            f"\nMirrored files: {made_mirrored}; CUSTOM files: {made_custom}."
+            if layout == "Mirror ROM folders"
+            else "\nOutput layout: legacy CUSTOM."
+        )
+        messagebox.showinfo(APP_NAME, f"Custom art output created:\n{run_dir}{extra}")
 
     def update_preview(self):
         if not self.current_source_image:
@@ -3319,7 +4351,7 @@ class ThumbnailScraperApp(tk.Tk):
             return
         try:
             data = json.loads(self.config_path.read_text(encoding="utf-8"))
-            for name in ("local_pack", "igdb_client", "igdb_token", "tgdb_key", "ss_dev_id", "ss_dev_pass", "ss_user", "ss_pass"):
+            for name in ("local_pack", "igdb_client", "igdb_secret", "igdb_token", "tgdb_key", "ss_dev_id", "ss_dev_pass", "ss_user", "ss_pass"):
                 var = getattr(self, f"{name}_var", None)
                 if var:
                     var.set(data.get(name, ""))
@@ -3392,6 +4424,9 @@ class ThumbnailScraperApp(tk.Tk):
             "region_enabled": self.region_enabled,
             "rom_region_enabled": {region: var.get() for region, var in self.rom_region_vars.items()},
             "igdb_client": self.igdb_client_var.get(),
+            "igdb_secret": self.igdb_secret_var.get(),
+            # Keep the older manually supplied token in the settings file for
+            # backward compatibility; new usage relies on Client ID + Secret.
             "igdb_token": self.igdb_token_var.get(),
             "tgdb_key": self.tgdb_key_var.get(),
             "ss_dev_id": self.ss_dev_id_var.get(),
@@ -3403,6 +4438,15 @@ class ThumbnailScraperApp(tk.Tk):
             "custom_output_layout": self.custom_output_layout_var.get(),
         }
         self.config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        # Credential edits should not keep using an access token or provider
+        # system catalogue obtained with values that the user just replaced.
+        providers = getattr(self, "providers", None)
+        if providers is not None:
+            providers._igdb_access_token = ""
+            providers._igdb_token_expires_at = 0.0
+            providers._igdb_platform_ids.clear()
+            providers._igdb_platform_catalog = None
+            providers._screenscraper_system_records = None
         self.status_var.set("Saved.")
 
 

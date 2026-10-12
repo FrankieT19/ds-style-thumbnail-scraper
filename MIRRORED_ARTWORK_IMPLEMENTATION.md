@@ -1,4 +1,44 @@
+## v1.9.1 cache-first scan ordering
+
+The SD scan uses this order before any online artwork search:
+
+1. Check all requested sizes for valid mirrored thumbnails under the selected SD root, root-level `IMGS`/`IMGS2`, and previous scraper output folders. Complete outputs are skipped without Libretro-index or provider lookup.
+2. Reuse a valid image already referenced by a saved Custom Art entry for the ROM.
+3. Check a persistent per-ROM source-image cache keyed by console, selected artwork type, and ROM-relative path. This key does not depend on the provider's current search-result label, so cached fallback-provider images are reusable too.
+4. Only on a cache miss, look for a Libretro filename match and then download its image; if no usable Libretro result exists, try TheGamesDB, ScreenScraper, and IGDB in order.
+5. Cache every newly accepted image by ROM identity as well as its provider/artwork identity. Subsequent scans can reuse it before asking any provider.
+
+`Build Custom Art` itself reads the image paths already attached to Custom Art entries and converts them to BMP output; it does not call online providers. Provider lookup happens during scan/search, and the scan now honors cached source images first.
+
+### v1.9.1 validation
+
+- `python -m py_compile "DS Style Thumbnail Scraper.py" thumbnail_image_data.py thumbnail_output_paths.py thumbnail_rendering.py ezflash_gba_thumbs.py` — passed.
+- `python -m unittest discover -s tests -v` — 50 tests passed, including cache-first checks for an existing thumbnail, saved cache from a prior scan, and cached TheGamesDB fallback results.
+- Windows executable build and live provider requests were not run in this environment.
+
+## v1.9.0 provider fallback and invalid-image choices
+
+- Automatic lookup now follows the fixed sequence **Libretro → TheGamesDB → ScreenScraper → IGDB**. Each source must return fully decodable image data; an empty, HTML, truncated or otherwise invalid response is treated as a miss and the next configured provider is tried.
+- ScreenScraper now uses the configured developer ID/password, optional user ID/password, `systemesListe.php` to resolve a console-specific system ID, and `jeuRecherche.php` to search that system. Media payloads are decoded/validated before they are accepted. The API documents `devid`, `devpassword`, `softname`, optional `ssid`/`sspassword`, `systemeid`, and `recherche`: https://www.screenscraper.fr/webapi2.php.
+- IGDB now uses Twitch Client ID + Client Secret via the client-credentials OAuth flow, caches the token until shortly before expiry, discovers platform IDs from IGDB's platform endpoint, and restricts game searches to that platform. IGDB documents OAuth and the `Client-ID`/Bearer headers here: https://api-docs.igdb.com/ and https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/.
+- The Settings tab exposes Client Secret (masked by default), provider-specific test actions, and links to API registration. Existing manually saved IGDB access tokens still work as a compatibility fallback if no Client Secret is entered, but new setup should use Client ID + Secret.
+- On an invalid/incomplete raw Libretro download during SD scanning, the former **Retry Download** action is now **Try Fallback**. It tries TheGamesDB, ScreenScraper and IGDB in that order, writes the first valid image to the persistent cache, and continues. **Skip Image** still skips only the failed image. Providers used during normal automatic searches also skip invalid responses and continue down the chain without requiring a prompt.
+- Credentials are stored in the local settings JSON. IGDB access tokens are held in memory during a session; changing credentials clears cached OAuth/platform lookup state.
+
+### v1.9.0 validation
+
+- `python -m py_compile "DS Style Thumbnail Scraper.py" thumbnail_image_data.py thumbnail_output_paths.py thumbnail_rendering.py ezflash_gba_thumbs.py` — passed.
+- `python -m unittest discover -s tests -v` — passed; includes fallback order, IGDB OAuth/system filtering, ScreenScraper system resolution/media validation, and Try Fallback flow.
+- Live API calls with the user's actual credentials and a fresh Windows executable build have not been performed in this environment.
+
 # Mirrored Artwork Output — Implementation Notes
+
+## v1.8.0 settings and operation progress
+
+- The Settings tab provides a masked TheGamesDB API-key field with Show/Hide, a link to TheGamesDB's API page, and a **Test key** action. Testing performs a fresh `/v1/Platforms` API request instead of trusting the 30-day platform cache. TheGamesDB API access uses an API key, not the website login password.
+- The Custom Art SD scan shows a live status window while walking directories and processing games, including counts, current console/game, provider fallback, cache checks and downloads. A continuously refreshed elapsed-time indicator helps distinguish slow work from a stalled window.
+- Build Custom Art now writes thumbnails in a background worker and reports the current item, output path, progress percentage and elapsed time. The Tk event loop remains available while images are loaded and BMPs are generated.
+- Added offline tests for API-key verification and progress callback dispatch. Run `python -m unittest discover -s tests -v` and `python -m py_compile "DS Style Thumbnail Scraper.py" thumbnail_image_data.py thumbnail_output_paths.py thumbnail_rendering.py ezflash_gba_thumbs.py`.
 
 ## Output behavior
 
@@ -62,3 +102,10 @@ For 80×80 output only, sources whose aspect ratio differs from square by more t
 ### Verification
 
 Added offline tests for Libretro→TheGamesDB fallback, platform filtering and image selection, Custom Art SD-scan fallback, centered contain-fit output, black-key padding and preservation of source-black details. Run `python -m unittest discover -s tests -v` and `python -m py_compile "DS Style Thumbnail Scraper.py" thumbnail_image_data.py thumbnail_output_paths.py thumbnail_rendering.py ezflash_gba_thumbs.py`.
+
+### v1.8.0 verification results
+
+- `python -m py_compile "DS Style Thumbnail Scraper.py" thumbnail_image_data.py thumbnail_output_paths.py thumbnail_rendering.py ezflash_gba_thumbs.py` — passed.
+- `python -m unittest discover -s tests -v` — 44 tests passed, including five new credential/progress tests.
+- GUI smoke checks under Xvfb — passed: Settings tab loads with TheGamesDB key controls, Show/Hide works, the progress window updates between indeterminate/determinate phases, a Custom Art build generates a BMP in the background, and an SD scan reports progress and completes successfully.
+- The Windows executable was not rebuilt in this Linux environment, and the live TheGamesDB key-validation request was covered with mocks rather than tested against a real key.
