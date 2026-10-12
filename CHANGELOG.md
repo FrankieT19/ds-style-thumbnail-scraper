@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.10.4 - Local-pack-first artwork lookup
+- Added a Settings toggle that makes matching local-pack artwork take priority over existing cached source images, selected online providers, and optional ROM hash lookup. The option is off by default.
+- Local packs are recursively name-matched inside detected console folders, independent of alphabet/nested folder layout; if no console folder is identifiable, the original whole-pack matching behavior remains.
+- Local packs are read-only sources. All generated thumbnails and source-image caches stay in the scraper output/cache locations.
+- Added regression coverage for console-aware nested matching, local source read-only behavior, and local-pack priority over cached/hash/provider paths.
+
 ## v1.10.3 - Automatic fallback toggle for SD scans
 
 - Added an SD-scan setup option to automatically try configured fallback providers when a Libretro artwork download fails, without prompting for each affected title.

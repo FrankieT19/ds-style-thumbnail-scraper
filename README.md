@@ -13,6 +13,8 @@ The [DS Style Manager](https://frankiet19.github.io/omega-de-ds-style-kernel/man
 ## Features
 
 - When multiple artwork matches exist, standard retail releases are prioritized over prototype, beta, demo, hack, mod, translation and other variant releases.
+- Optional local-pack-first matching: search detected console folders recursively by title, regardless of alphabet/nested artwork subfolders; found local artwork can override cached and online/hash results.
+- The configured local pack is read-only; generated images and caches are written only to the scraper output/cache locations.
 - Cache-first incremental SD scans: reuse completed thumbnails and per-ROM cached source images before online provider lookup
 - Optional ROM hash matching toggle in the SD-scan setup: after name searches fail, calculate CRC32, MD5 and SHA-1 and try TheGamesDB then ScreenScraper (slower; off by default)
 - Optional automatic fallback toggle in SD-scan setup, also available in the first artwork-download failure prompt, to continue with configured fallback providers for later titles without repeated prompts

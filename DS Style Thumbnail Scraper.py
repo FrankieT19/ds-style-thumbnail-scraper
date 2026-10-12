@@ -43,7 +43,7 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Thumbnail Scraper"
-APP_VERSION = "1.10.3"
+APP_VERSION = "1.10.4"
 OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper output"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
 CONFIG_NAME = "thumbnail_scraper_settings.json"
@@ -636,6 +636,10 @@ class Providers:
         self.libretro_indexes: dict[tuple[str, str], list[str]] = {}
         self.libretro_direct_indexes: dict[tuple, tuple[dict[str, str], list[str]]] = {}
         self.local_art_index = None
+        self.local_art_index_root: Path | None = None
+        self.local_art_files: list = []
+        self.local_art_indexes_by_system: dict[str, dict[str, list]] = {}
+        self.local_art_token_indexes_by_system: dict[str, dict[str, list]] = {}
         self._igdb_access_token = ""
         self._igdb_token_expires_at = 0.0
         self._igdb_platform_ids: dict[str, int] = {}
@@ -669,6 +673,18 @@ class Providers:
         system: str = DEFAULT_SYSTEM,
     ) -> list[ProviderResult]:
         provider = provider_key(provider)
+        # Optional global preference: matching local art wins before provider lookups.
+        if provider != "Local Pack" and self._local_pack_priority_enabled():
+            try:
+                local_results = self.search_local_pack_many(query, max_results, system=system)
+                usable_local = [
+                    result for result in local_results if is_valid_image_data(result.image_data)
+                ]
+                if usable_local:
+                    return usable_local if max_results is None else usable_local[:max_results]
+            except Exception:
+                # A local miss must never block the ordinary provider flow.
+                pass
         if provider == "Libretro":
             errors: list[str] = []
             try:
@@ -703,7 +719,7 @@ class Providers:
         system: str,
     ) -> list[ProviderResult]:
         if provider == "Local Pack":
-            return self.search_local_pack_many(query, max_results)
+            return self.search_local_pack_many(query, max_results, system=system)
         if provider == "IGDB":
             return self.search_igdb_many(query, max_results, system=system)
         if provider == "TheGamesDB":
@@ -717,6 +733,12 @@ class Providers:
     def _credential_value(self, name: str) -> str:
         variable = getattr(self.app, name, None)
         return variable.get().strip() if variable is not None else ""
+
+    def _local_pack_priority_enabled(self) -> bool:
+        # Use the instance dictionary to avoid tkinter.Misc.__getattr__ recursion
+        # for lightweight test doubles that do not create a Tcl interpreter.
+        variable = vars(self.app).get("local_pack_priority_var")
+        return bool(variable is not None and variable.get())
 
     def provider_is_configured(self, provider: str) -> bool:
         if provider == "TheGamesDB":
@@ -1001,22 +1023,103 @@ class Providers:
 
         return list(dict.fromkeys(queries))
 
-    def search_local_pack_many(self, query: str, max_results: int | None = 20) -> list[ProviderResult]:
+    def local_pack_system_aliases(self, system: str) -> set[str]:
+        """Normalized directory names used by common local artwork-pack layouts."""
+        aliases = [system]
+        details = LIBRETRO_SYSTEMS.get(system)
+        if details:
+            aliases.append(details.get("repo", ""))
+        for mapping in (
+            THEGAMESDB_PLATFORM_ALIASES,
+            SCREENSCRAPER_SYSTEM_ALIASES,
+            IGDB_PLATFORM_ALIASES,
+        ):
+            aliases.extend(mapping.get(system, ()))
+        return {normalize_for_match(value) for value in aliases if value and normalize_for_match(value)}
+
+    def local_pack_art_files_for_system(self, art_files, pack_path: Path, system: str):
+        """Scope matching to a detected console folder, irrespective of deeper nesting.
+
+        If the pack has no recognizable folder for this console, preserve the legacy
+        whole-pack behavior. The configured pack is read-only: this only inspects paths.
+        """
+        aliases = self.local_pack_system_aliases(system)
+        scoped = []
+        for art in art_files:
+            try:
+                folder_parts = art.path.relative_to(pack_path).parts[:-1]
+            except ValueError:
+                continue
+            if any(normalize_for_match(part) in aliases for part in folder_parts):
+                scoped.append(art)
+        return (scoped, True) if scoped else (list(art_files), False)
+
+    def search_local_pack_many(
+        self, query: str, max_results: int | None = 20, system: str = DEFAULT_SYSTEM
+    ) -> list[ProviderResult]:
         pack = self.app.local_pack_var.get().strip()
         if not pack:
             raise LookupError("Choose a local art pack folder first.")
-        pack_path = Path(pack)
-        if self.local_art_index is None:
+        pack_path = Path(pack).expanduser()
+        resolved_pack = pack_path.resolve()
+        if self.local_art_index is None or self.local_art_index_root != resolved_pack:
             primary, europe = iter_art_files(pack_path)
-            self.local_art_index = build_art_index(primary + europe)
+            self.local_art_files = primary + europe
+            self.local_art_index = build_art_index(self.local_art_files)
+            self.local_art_index_root = resolved_pack
+            self.local_art_indexes_by_system = {}
+            self.local_art_token_indexes_by_system = {}
+
+        # Console filtering and token indexes are built once per console, not per title.
+        # This keeps local-first lookups usable for large media collections.
+        index_key = system.casefold()
+        if index_key not in self.local_art_indexes_by_system:
+            scoped_art_files, has_console_folder = self.local_pack_art_files_for_system(
+                self.local_art_files, pack_path, system
+            )
+            self.local_art_indexes_by_system[index_key] = (
+                build_art_index(scoped_art_files) if has_console_folder else self.local_art_index
+            )
+        search_index = self.local_art_indexes_by_system[index_key]
+        if index_key not in self.local_art_token_indexes_by_system:
+            token_index: dict[str, list] = {}
+            seen_paths: set[str] = set()
+            for arts in search_index.values():
+                for art in arts:
+                    path_key = str(art.path).casefold()
+                    if path_key in seen_paths:
+                        continue
+                    seen_paths.add(path_key)
+                    for token in content_tokens(art.title):
+                        token_index.setdefault(token, []).append(art)
+            self.local_art_token_indexes_by_system[index_key] = token_index
+        token_index = self.local_art_token_indexes_by_system[index_key]
+
+        # Local pack filenames are normalized through clean_title(), which drops
+        # release tags. Apply that cleanup only to the local comparison; online
+        # searches retain No-Intro region tags as requested.
+        match_query = clean_title(query).strip() or query.strip()
+        query_tokens = content_tokens(match_query)
+        exact_group = search_index.get(normalize_for_match(match_query), [])
+        if exact_group:
+            candidate_art_files = exact_group
+        elif query_tokens:
+            token_buckets = [token_index.get(token, []) for token in query_tokens]
+            rarest_bucket = min(token_buckets, key=len, default=[])
+            candidate_art_files = [
+                art for art in rarest_bucket
+                if query_tokens.issubset(content_tokens(art.title))
+            ]
+        else:
+            candidate_art_files = [art for arts in search_index.values() for art in arts]
+
         candidates = []
-        for arts in self.local_art_index.values():
-            for art in arts:
-                if not self.app.region_allowed(self.local_art_region_text(art)):
-                    continue
-                score = title_match_score(query, art.title)
-                if score >= 2.2 and title_search_compatible(query, art.title):
-                    candidates.append((score, art))
+        for art in candidate_art_files:
+            if not self.app.region_allowed(self.local_art_region_text(art)):
+                continue
+            score = title_match_score(match_query, art.title)
+            if score >= 2.2 and title_search_compatible(match_query, art.title):
+                candidates.append((score, art))
         candidates.sort(
             key=lambda item: (
                 variant_rank(str(item[1].path)),
@@ -1025,17 +1128,18 @@ class Providers:
                 item[1].path.name.casefold(),
             ),
         )
-        if not candidates:
-            art = find_best_art(query, self.local_art_index)
+        if not candidates and (candidate_art_files or not query_tokens):
+            fallback_index = build_art_index(candidate_art_files) if query_tokens else search_index
+            art = find_best_art(match_query, fallback_index)
             candidates = [(99, art)] if art and self.app.region_allowed(self.local_art_region_text(art)) else []
         limit = len(candidates) if max_results is None else max_results
         results = [
-            ProviderResult("Local Pack", self.local_art_label(art, pack_path), art.path.read_bytes())
+            ProviderResult("Local Pack", self.local_art_label(art, pack_path), art.path.read_bytes(), system)
             for _score, art in candidates[:limit]
             if art
         ]
         if not results:
-            raise LookupError("No local art match found.")
+            raise LookupError(f"No local art match found for {query!r} on {system}.")
         return results
 
     def local_art_region_text(self, art) -> str:
@@ -1809,6 +1913,7 @@ class ThumbnailScraperApp(tk.Tk):
         self.build_output_var = tk.StringVar(value="")
         self.build_progress_var = tk.DoubleVar(value=0.0)
         self.local_pack_var = tk.StringVar()
+        self.local_pack_priority_var = tk.BooleanVar(value=False)
         self.igdb_client_var = tk.StringVar()
         self.igdb_secret_var = tk.StringVar()
         # Preserved only to support settings files made before automatic OAuth
@@ -2395,7 +2500,8 @@ class ThumbnailScraperApp(tk.Tk):
             ("ScreenScraper username (optional)", self.ss_user_var, None, False),
             ("ScreenScraper password (optional)", self.ss_pass_var, "ss_pass", True),
         ]
-        for row, (label, var, action, hidden) in enumerate(fields, start=1):
+        for field_index, (label, var, action, hidden) in enumerate(fields):
+            row = field_index + 1 + (1 if field_index else 0)
             ttk.Label(self.settings_tab, text=label).grid(row=row, column=0, sticky="w", pady=6)
             if action == "folder":
                 ttk.Entry(self.settings_tab, textvariable=var, width=54).grid(
@@ -2404,6 +2510,12 @@ class ThumbnailScraperApp(tk.Tk):
                 ttk.Button(self.settings_tab, text="Browse", command=self.choose_local_pack).grid(
                     row=row, column=2, sticky="w"
                 )
+                ttk.Checkbutton(
+                    self.settings_tab,
+                    text="Prefer matching local-pack art over existing caches and online/hash results",
+                    variable=self.local_pack_priority_var,
+                    command=self.save_settings,
+                ).grid(row=row + 1, column=1, columnspan=2, sticky="w", padx=(10, 8), pady=(0, 6))
             elif action in {"thegamesdb", "igdb_secret", "ss_dev_pass", "ss_pass"}:
                 controls = ttk.Frame(self.settings_tab, style="Panel.TFrame")
                 controls.grid(row=row, column=1, sticky="w", padx=(10, 8))
@@ -2445,7 +2557,7 @@ class ThumbnailScraperApp(tk.Tk):
                     )
                     self.ss_test_button.grid(row=row, column=2, sticky="w")
 
-        help_row = len(fields) + 1
+        help_row = len(fields) + 2
         ttk.Label(
             self.settings_tab,
             text=(
@@ -3482,12 +3594,12 @@ class ThumbnailScraperApp(tk.Tk):
                 return candidate
         return None
 
-    def cache_sd_scan_image(self, cache_path: Path, data: bytes) -> str:
+    def cache_sd_scan_image(self, cache_path: Path, data: bytes, overwrite: bool = False) -> str:
         """Persist a validated provider response as a reusable PNG cache file."""
         if not is_valid_image_data(data):
             raise ValueError("Cannot cache invalid or incomplete artwork data.")
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        if not is_valid_image_file(cache_path):
+        if overwrite or not is_valid_image_file(cache_path):
             with Image.open(io.BytesIO(data)) as source_image:
                 source_image.load()
                 converted = source_image.convert("RGBA")
@@ -3655,6 +3767,33 @@ class ThumbnailScraperApp(tk.Tk):
             # itself must not contact online artwork services.
             candidates.append(SdRomCandidate(path, system, target_name, relative, None))
 
+        local_pack_matches: dict[str, ProviderResult] = {}
+        # Test instances can be created without initializing Tk; reading vars()
+        # avoids Tk's recursive __getattr__ when an optional setting is absent.
+        app_state = vars(self)
+        priority_setting = app_state.get("local_pack_priority_var")
+        pack_setting = app_state.get("local_pack_var")
+        local_search = getattr(self.providers, "search_local_pack_many", None)
+        local_priority_enabled = bool(priority_setting is not None and priority_setting.get())
+        if local_priority_enabled and pack_setting is not None and pack_setting.get().strip() and callable(local_search):
+            for local_index, candidate in enumerate(candidates, start=1):
+                if local_index == 1 or local_index % 20 == 0 or local_index == len(candidates):
+                    report(
+                        "Searching local pack before cached/provider artwork",
+                        local_index,
+                        max(1, len(candidates)),
+                        f"{candidate.system}: {candidate.path.name}",
+                    )
+                try:
+                    local_results = local_search(
+                        strip_nointro_tags(candidate.title), max_results=1, system=candidate.system
+                    )
+                    if local_results and is_valid_image_data(local_results[0].image_data):
+                        local_pack_matches[candidate.relative.casefold()] = local_results[0]
+                except Exception:
+                    # A local miss is not fatal; continue with the normal cache/provider chain.
+                    continue
+
         # Resolve candidate directories once per size; thousands of ROMs should
         # not trigger thousands of repeated directory listings.
         output_roots_by_size = {
@@ -3677,6 +3816,10 @@ class ThumbnailScraperApp(tk.Tk):
                     candidate.path.name,
                 )
             target_key = candidate.relative.casefold()
+            if target_key in local_pack_matches:
+                # Queue even already-complete sizes for refresh by the Custom Art build step.
+                needed_sizes[target_key] = set(size_names)
+                continue
             missing: set[str] = set()
             for size in size_names:
                 key = (target_key, size)
@@ -3713,6 +3856,19 @@ class ThumbnailScraperApp(tk.Tk):
             # Existing IMGS/IMGS2 and completed entries were checked above. If
             # nothing needs work for this ROM, do not even query Libretro's index.
             if not needed_sizes.get(target_key):
+                continue
+            local_result = local_pack_matches.get(target_key)
+            if local_result is not None:
+                matches.append(
+                    SdArtworkMatch(
+                        candidate.path,
+                        candidate.system,
+                        local_result.label,
+                        candidate.relative,
+                        "Local Pack",
+                        local_result.image_data,
+                    )
+                )
                 continue
 
             # First reuse a saved Custom Art source image associated with this ROM.
@@ -3872,6 +4028,17 @@ class ThumbnailScraperApp(tk.Tk):
             cache_path = self.sd_scan_cache_path(cache_source, system, art_name)
             cache_paths[key] = cache_path
             match = matches_by_art[key]
+            if provider == "Local Pack" and match.image_data:
+                # Always refresh scraper cache copies from a selected local-pack source.
+                downloaded[key] = match.image_data
+                try:
+                    self.cache_sd_scan_image(cache_path, match.image_data, overwrite=True)
+                    downloaded[key] = cache_path.read_bytes()
+                except Exception as exc:
+                    download_errors.append(
+                        f"{system}: {display_libretro_name(art_name)} (local-pack cache refresh failed: {exc})"
+                    )
+                continue
             if provider == "Cached" and match.image_data:
                 # The per-ROM cache was already checked before any provider query.
                 # Populate the general source cache for compatibility with older
@@ -4047,7 +4214,11 @@ class ThumbnailScraperApp(tk.Tk):
             # provider name/label. The next scan checks this before online lookup.
             rom_cache_path = self.sd_scan_rom_cache_path(folder, match.system, match.relative)
             try:
-                self.cache_sd_scan_image(rom_cache_path, data)
+                self.cache_sd_scan_image(
+                    rom_cache_path,
+                    data,
+                    overwrite=(local_priority_enabled and match.provider == "Local Pack"),
+                )
             except Exception as exc:
                 download_errors.append(
                     f"{match.system}: {match.path.name} (per-ROM cache write failed: {exc})"
@@ -4665,6 +4836,10 @@ class ThumbnailScraperApp(tk.Tk):
         if path:
             self.local_pack_var.set(path)
             self.providers.local_art_index = None
+            self.providers.local_art_index_root = None
+            self.providers.local_art_files = []
+            self.providers.local_art_indexes_by_system = {}
+            self.providers.local_art_token_indexes_by_system = {}
             self.update_local_pack_label()
             self.save_settings()
             self.on_source_change()
@@ -4757,13 +4932,34 @@ class ThumbnailScraperApp(tk.Tk):
             prefetched_images = {}
             prefetched_errors = {}
             task_art_names = {}
+            build_state = vars(self)
+            local_priority_var = build_state.get("local_pack_priority_var")
+            local_pack_var = build_state.get("local_pack_var")
+            local_priority_for_build = bool(
+                local_priority_var is not None
+                and local_priority_var.get()
+                and local_pack_var is not None
+                and local_pack_var.get().strip()
+            )
+            if local_priority_for_build:
+                for task_number, (entry, _size_name, rule) in enumerate(tasks, start=1):
+                    if rule:
+                        continue  # Preserve explicit per-title exceptions.
+                    try:
+                        local_result = self.providers.search_local_pack_many(
+                            entry.title, max_results=1, system=DEFAULT_SYSTEM
+                        )[0]
+                        if is_valid_image_data(local_result.image_data):
+                            prefetched_images[task_number] = local_result.image_data
+                    except Exception:
+                        pass
             normal_libretro_build = self.build_provider_var.get() == "Libretro"
             if normal_libretro_build:
                 unique_art_urls = {}
                 self.set_build_progress(0, "Matching artwork to games...", "")
                 art_by_code_root = self.providers.direct_libretro_art_map(self.build_libretro_source_var.get())
                 for task_number, (entry, _size_name, rule) in enumerate(tasks, start=1):
-                    if rule:
+                    if rule or task_number in prefetched_images:
                         continue
                     art_match = art_by_code_root.get(entry.code[:3] if entry.code else "")
                     if art_match:
@@ -4895,6 +5091,8 @@ class ThumbnailScraperApp(tk.Tk):
                 var = getattr(self, f"{name}_var", None)
                 if var:
                     var.set(data.get(name, ""))
+            if hasattr(self, "local_pack_priority_var"):
+                self.local_pack_priority_var.set(bool(data.get("local_pack_priority", False)))
             if data.get("build_provider") in PROVIDER_VALUES:
                 self.build_provider_var.set(data["build_provider"])
             if data.get("custom_output_layout") in {"Mirror ROM folders", "Legacy CUSTOM"}:
@@ -4954,8 +5152,10 @@ class ThumbnailScraperApp(tk.Tk):
         self._saved_provider_credentials = self._provider_credentials_snapshot()
 
     def save_settings(self):
+        local_pack_priority_var = getattr(self, "local_pack_priority_var", None)
         data = {
             "local_pack": self.local_pack_var.get(),
+            "local_pack_priority": bool(local_pack_priority_var.get()) if local_pack_priority_var is not None else False,
             "build_provider": self.build_provider_var.get(),
             "preview_provider": self.preview_provider_var.get(),
             "preview_system": self.preview_system_var.get(),
