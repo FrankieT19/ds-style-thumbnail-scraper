@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.10.1 - Responsive region controls and previews
+
+- Debounced settings writes for Game regions to build and Artwork priority controls, avoiding repeated synchronous serialization while the user clicks rapidly.
+- Prevented Artwork priority edits from triggering duplicate online searches across both tabs. Build Pack preview refreshes are debounced, run in a single background worker, discard stale results, and show a visible indeterminate progress bar/status while providers are queried.
+- Search & Preview priority edits reorder already-fetched results locally instead of running another provider query; local gallery thumbs are reused from cache, and suggestion filtering is debounced on enable/disable.
+- Provider system/catalogue caches are invalidated only when saved provider credentials actually change, not on ordinary region or UI preference saves.
+- Added regression tests for region-scope isolation, debounced actions, preview coalescing, and provider-cache preservation.
+
+
+## v1.10.0 - Optional ROM hash matching and No-Intro query cleanup
+
+- Added a pre-scan checkbox for optional ROM hash matching. It is off by default and only hashes ROM contents after cached artwork, existing thumbnails, and all name-based provider searches fail.
+- Computes CRC32, MD5, SHA-1 and file size in one streaming read. Hash-based lookup tries TheGamesDB and then ScreenScraper using the detected console/platform; Libretro and IGDB do not expose a direct ROM-file hash artwork lookup.
+- Cleans common No-Intro region, language, revision/version and square-bracket dump/status tags from online search queries, while preserving the original ROM filename, relative output path and cache identity.
+- Added offline tests for filename cleanup, streaming hashes, provider hash parameters, fallback order and the pre-scan toggle.
+
+
 ## v1.9.2 - Selective transparent thumbnail marker
 
 - Mark only BMP outputs that contain intentional transparent canvas pixels with `DST1` in the reserved BMP header bytes expected by compatible kernel builds.

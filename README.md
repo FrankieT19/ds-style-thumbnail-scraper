@@ -13,6 +13,9 @@ The [DS Style Manager](https://frankiet19.github.io/omega-de-ds-style-kernel/man
 ## Features
 
 - Cache-first incremental SD scans: reuse completed thumbnails and per-ROM cached source images before online provider lookup
+- Optional ROM hash matching toggle in the SD-scan setup: after name searches fail, calculate CRC32, MD5 and SHA-1 and try TheGamesDB then ScreenScraper (slower; off by default)
+- No-Intro filename cleanup for online queries, removing common region/language/revision and square-bracket dump tags without renaming ROMs or changing output paths
+- Responsive region controls: debounce settings saves and Build Pack preview lookups; Search & Preview artwork-priority changes reorder cached results locally without issuing new provider requests
 
 - `120 x 80` title thumbnails for `IMGS`
 - `80 x 80` box thumbnails for `IMGS2`
@@ -61,11 +64,11 @@ python -m venv .venv
 
 ## Tests and Building The Executable
 
-Run the mirrored-output, provider fallback, aspect-fitting, black color-key, retry/skip, cache and SD-scan regression tests from the project folder:
+Run the mirrored-output, provider fallback and ROM-hash matching, No-Intro cleanup, aspect-fitting, black color-key, retry/skip, cache and SD-scan regression tests from the project folder:
 
 ```powershell
 python -m unittest discover -s tests -v
-python -m py_compile "DS Style Thumbnail Scraper.py" thumbnail_output_paths.py thumbnail_image_data.py thumbnail_rendering.py ezflash_gba_thumbs.py
+python -m py_compile "DS Style Thumbnail Scraper.py" rom_matching.py thumbnail_output_paths.py thumbnail_image_data.py thumbnail_rendering.py ezflash_gba_thumbs.py
 ```
 
 Build the Windows executable on Windows with Python installed:

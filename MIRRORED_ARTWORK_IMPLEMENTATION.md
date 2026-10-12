@@ -114,3 +114,15 @@ Added offline tests for Libretro→TheGamesDB fallback, platform filtering and i
 ## v1.9.2 selective transparency marker
 
 Newly generated BMPs receive the `DST1` signature in reserved BMP header bytes 6–9 only when their image contains pixels whose alpha is below the writer's transparency threshold. This is intended for aspect-preserving 80×80 box-art output with transparent padding. Opaque output remains unmarked, so existing GBA artwork and legacy CUSTOM artwork keep the old kernel drawing behavior. A compatible kernel build must recognize `DST1`; older kernels ignore the header bytes and will still draw the black padding as black.
+
+
+## v1.10.0 — Optional hash-assisted matching
+
+The SD Scan setup dialog now has an opt-in “Use ROM hash matching if name searches fail” toggle, off by default. Existing thumbnails and local source-image caches still take precedence. All online name matching is attempted first in the regular provider order; only after that chain returns no valid image does hash mode stream the ROM file once to compute CRC32, MD5, SHA-1 and file size. TheGamesDB hash lookup is attempted before ScreenScraper’s ROM identification endpoint. Libretro thumbnail lookup and IGDB do not have a documented direct ROM-file hash-to-art endpoint.
+
+For name matching, known No-Intro-style tags (region/language/version/revision parentheses and square-bracket dump/status tags) are removed from a temporary search string. Original ROM names, mirrored output paths and per-ROM cache identities remain untouched. The current implementation hashes the supported ROM file as stored on disk; it does not unpack ZIP/7z/archive contents.
+
+
+## v1.10.1 region-control responsiveness
+
+The Build Pack region controls defer settings-file writes until the user pauses. Artwork-priority changes in Build Pack debounce preview provider lookups and display an indeterminate progress indicator with status text. Only the relevant preview is refreshed; a generation counter discards stale results and serializes build-preview work to avoid concurrent request storms. In Search & Preview, priority changes regroup existing results locally instead of issuing fresh provider searches. Gallery thumbnail images are cached across these local reorders, and autocomplete filtering is debounced when region enablement changes. Provider system/catalogue caches are retained when unrelated settings such as regions are saved, and cleared only when provider credential values actually change.
