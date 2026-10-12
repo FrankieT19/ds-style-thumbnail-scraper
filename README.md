@@ -15,7 +15,7 @@ The [DS Style Manager](https://frankiet19.github.io/omega-de-ds-style-kernel/man
 - `120 x 80` title thumbnails for `IMGS`
 - `80 x 80` box thumbnails for `IMGS2`
 - Libretro and local artwork-pack sources
-- System-aware Libretro search for supported consoles
+- System-aware Libretro search for supported consoles, with automatic TheGamesDB fallback when no usable Libretro artwork match is found
 - SD library scanning that finds artwork only for installed games
 - Retry/skip prompts for failed artwork downloads
 - Persistent source-image caching and incremental scans that skip existing valid `IMGS` / `IMGS2` thumbnails
@@ -24,9 +24,10 @@ The [DS Style Manager](https://frankiet19.github.io/omega-de-ds-style-kernel/man
 - Exact-name custom artwork for files and folders
 - Mirrored artwork output preserving console/alphabet folders under `IMGS` and `IMGS2`
 - Optional `CUSTOM/<extension>.bmp` defaults (for example `gb.bmp` or `nes.bmp`)
-- EZ-FLASH-compatible 15-bit BMP output
+- EZ-FLASH-compatible 15-bit BMP output with pure-black transparency key support
+- Aspect-preserving, centered box-art fitting for distinctly portrait or landscape source covers, with transparent/black-key margins
 
-The mirrored layout requires a DS Style kernel build that includes the matching mirrored-artwork lookup changes; older kernels continue to use their flat `CUSTOM` lookup. The **Custom Art** tab offers two output layouts:
+The mirrored layout requires a DS Style kernel build that includes the matching mirrored-artwork lookup changes; older kernels continue to use their flat `CUSTOM` lookup. Automatic TheGamesDB fallback requires an API key, which you can enter under **Settings → Provider Credentials**. When Libretro has no usable match, the scraper searches TheGamesDB for the selected console/platform and prefers front box art. The **Custom Art** tab offers two output layouts:
 
 - **Mirror ROM folders (recommended):** artwork follows each ROM's path relative to the SD root selected during Scan SD Card. This output is not limited by the flat `CUSTOM` artwork index. For example, `Game Boy/T/Tetris (World).gb` becomes `IMGS/Game Boy/T/Tetris (World).bmp` and `IMGS2/Game Boy/T/Tetris (World).bmp`.
 - **Legacy CUSTOM:** artwork is flattened into `IMGS/CUSTOM` and `IMGS2/CUSTOM`. The kernel's legacy indexed lookup supports up to 256 ordinary custom images per size. Extension defaults such as `gb.bmp` and `nes.bmp` are loaded directly and do not consume an index entry.
@@ -57,11 +58,11 @@ python -m venv .venv
 
 ## Tests and Building The Executable
 
-Run the path/output, retry/skip, cache and SD-scan regression tests from the project folder:
+Run the mirrored-output, provider fallback, aspect-fitting, black color-key, retry/skip, cache and SD-scan regression tests from the project folder:
 
 ```powershell
 python -m unittest discover -s tests -v
-python -m py_compile "DS Style Thumbnail Scraper.py" thumbnail_output_paths.py thumbnail_image_data.py
+python -m py_compile "DS Style Thumbnail Scraper.py" thumbnail_output_paths.py thumbnail_image_data.py thumbnail_rendering.py ezflash_gba_thumbs.py
 ```
 
 Build the Windows executable on Windows with Python installed:

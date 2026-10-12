@@ -1,4 +1,4 @@
-DS STYLE THUMBNAIL SCRAPER v1.6.2
+DS STYLE THUMBNAIL SCRAPER v1.7.0
 
 For DS Style v7.4 or newer.
 
@@ -18,6 +18,15 @@ Failed image downloads now prompt you to Retry Download or Skip Image. Successfu
 By default, scanned ROM artwork mirrors each ROM's directory path under IMGS and IMGS2. The mirrored files do not use the flat CUSTOM index and are not limited to 256 images. "Legacy CUSTOM" remains available for older kernels/workflows and is limited to 256 ordinary indexed images per size. Extension defaults such as CUSTOM/gb.bmp are supported by kernels with the matching artwork changes.
 
 The scraper does not download games or modify ROM files.
+
+
+THEGAMESDB FALLBACK (v1.7.0)
+
+When a Libretro search has no usable artwork match, the scraper automatically tries TheGamesDB using the selected system's platform ID. Add your TheGamesDB API key under Settings > Provider Credentials. TheGamesDB requires a key; without one, the failed fallback is reported clearly. Platform-name/ID data is cached for 30 days.
+
+BOX ART FIT AND TRANSPARENCY (v1.7.0)
+
+For 80x80 box art, noticeably portrait or landscape images are scaled proportionally and centered rather than cropped to fill the square. The empty area uses the kernel's pure-black transparency key (RGB555 zero). Visible source pixels that would reduce to RGB555 zero are adjusted to #080808 so black artwork remains visible.
 
 
 ARTWORK MIRRORING (v1.6)

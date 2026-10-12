@@ -47,3 +47,18 @@ Validation performed for v1.6.1: Python compilation passed and 19 unit tests pas
 
 
 Current v1.6.2 validation: `python -m py_compile "DS Style Thumbnail Scraper.py" thumbnail_output_paths.py thumbnail_image_data.py` passed, and `python -m unittest discover -s tests -v` passed all 25 tests. The Windows executable was not built in this Linux environment.
+
+
+## v1.7.0 additions
+
+### TheGamesDB fallback
+
+When a Libretro title lookup yields no usable match, the scraper can retry via TheGamesDB. It fetches the official platform list and matches the selected console to an explicit platform ID before querying `/v1.1/Games/ByGameName` with `filter[platform]`, requesting box art and platform metadata. A TheGamesDB API key must be entered under Settings → Provider Credentials. Platform IDs are cached for 30 days. The provider API documents the required API key and platform filtering in its official specification: https://api.thegamesdb.net/ and https://github.com/TheGamesDB/TheGamesDBv2/blob/master/API/spec.yaml.
+
+### Aspect-preserving box art and black transparency key
+
+For 80×80 output only, sources whose aspect ratio differs from square by more than 12% are contained, proportionally scaled and centered instead of cropped-to-fill. Empty canvas pixels use alpha 0 internally and are written as RGB555 zero (pure black) in the final BMP, which DS Style treats as its transparency key. Opaque pixels that would quantize to RGB555 zero are lifted to RGB555 (1,1,1), equivalent to #080808, so source black details remain visible. No kernel change is required.
+
+### Verification
+
+Added offline tests for Libretro→TheGamesDB fallback, platform filtering and image selection, Custom Art SD-scan fallback, centered contain-fit output, black-key padding and preservation of source-black details. Run `python -m unittest discover -s tests -v` and `python -m py_compile "DS Style Thumbnail Scraper.py" thumbnail_image_data.py thumbnail_output_paths.py thumbnail_rendering.py ezflash_gba_thumbs.py`.

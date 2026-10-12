@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.7.0
+
+- Added automatic TheGamesDB artwork fallback when Libretro search has no usable match, using the selected console's platform ID to avoid cross-system results.
+- TheGamesDB fallback uses the API key configured under Settings → Provider Credentials; platform metadata is cached for 30 days.
+- For 80×80 box-art output, distinctly portrait or landscape source art is scaled proportionally, centered, and contained in the square canvas instead of being cropped to fill it.
+- Empty canvas pixels export as pure black (RGB555 zero), the DS Style transparency color key. Visible source pixels that would quantize to black are lifted to RGB555 #080808 so genuine black detail remains visible.
+- Added regression tests for API fallback/platform filtering, SD-scan fallback, aspect-preserving artwork fit, and black color-key transparency.
+
 ## v1.6.2
 
 - Added Retry Download / Skip Image prompts when an artwork request fails or returns invalid image data.

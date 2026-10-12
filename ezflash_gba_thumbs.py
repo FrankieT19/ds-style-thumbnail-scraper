@@ -231,8 +231,20 @@ def write_ezflash_bmp(image: Image.Image, path: Path) -> None:
 
     pixels = bytearray()
     for y in range(height):
-        for r, g, b in (image.getpixel((x, y)) for x in range(width)):
-            gba_bgr555 = ((b >> 3) << 10) | ((g >> 3) << 5) | (r >> 3)
+        for pixel in (image.getpixel((x, y)) for x in range(width)):
+            if len(pixel) >= 4 and pixel[3] < 128:
+                # The DS Style kernel uses RGB555 word 0 (pure black) as the
+                # color-key transparent pixel in generated thumbnail BMPs.
+                gba_bgr555 = 0x0000
+            else:
+                r, g, b = pixel[:3]
+                red5, green5, blue5 = r >> 3, g >> 3, b >> 3
+                # Because RGB555 discards the low three bits, e.g. #010101
+                # would also encode as the transparent zero word. Lift those
+                # visible near-black pixels to RGB555 (1,1,1), i.e. #080808.
+                if red5 == 0 and green5 == 0 and blue5 == 0:
+                    red5 = green5 = blue5 = 1
+                gba_bgr555 = (blue5 << 10) | (green5 << 5) | red5
             pixels.extend(struct.pack("<H", gba_bgr555))
         if padding:
             pixels.extend(b"\0" * padding)

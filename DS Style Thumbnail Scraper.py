@@ -25,6 +25,7 @@ from ezflash_gba_full_library import load_gba_library
 from ezflash_gba_pack_converter import build_art_index, find_best_art, iter_art_files
 from thumbnail_output_paths import infer_relative_rom_path, mirrored_thumbnail_path, relative_path_from_root
 from thumbnail_image_data import is_valid_image_data, is_valid_image_file
+from thumbnail_rendering import fit_image_to_canvas, should_fit_art
 
 from ezflash_gba_thumbs import (
     app_dir,
@@ -40,7 +41,7 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Thumbnail Scraper"
-APP_VERSION = "1.6.2"
+APP_VERSION = "1.7.0"
 OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper output"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
 CONFIG_NAME = "thumbnail_scraper_settings.json"
@@ -115,6 +116,27 @@ LIBRETRO_SOURCE_FOLDERS = {
     "Box Art": "Named_Boxarts",
     "Gameplay Screenshot": "Named_Snaps",
     "Title Screen": "Named_Titles",
+}
+THEGAMESDB_BASE_URL = "https://api.thegamesdb.net"
+THEGAMESDB_PLATFORM_ALIASES = {
+    "Game Boy Advance": ("Nintendo Game Boy Advance", "Game Boy Advance"),
+    "Game Boy": ("Nintendo Game Boy", "Game Boy"),
+    "Game Boy Color": ("Nintendo Game Boy Color", "Game Boy Color"),
+    "Nintendo Entertainment System": ("Nintendo Entertainment System (NES)", "Nintendo Entertainment System", "NES"),
+    "Master System": ("Sega Master System", "Master System"),
+    "Game Gear": ("Sega Game Gear", "Game Gear"),
+    "SG-1000": ("SEGA SG-1000", "SG-1000"),
+    "PC Engine": ("TurboGrafx 16", "TurboGrafx-16", "NEC PC Engine", "PC Engine"),
+    "Neo Geo Pocket": ("Neo Geo Pocket",),
+    "Neo Geo Pocket Color": ("Neo Geo Pocket Color",),
+    "WonderSwan": ("WonderSwan",),
+    "WonderSwan Color": ("WonderSwan Color",),
+    "MSX": ("MSX",),
+    "Watara Supervision": ("Watara Supervision",),
+    "ZX Spectrum": ("Sinclair ZX Spectrum", "ZX Spectrum"),
+    "ColecoVision": ("Colecovision", "ColecoVision"),
+    "Arcadia 2001": ("Emerson Arcadia 2001", "Arcadia 2001"),
+    "Super Cassette Vision": ("Epoch Super Cassette Vision", "Super Cassette Vision"),
 }
 GBA_SOURCE_CACHE_FILES = {
     "Named_Boxarts": "libretro_gba_boxarts.json",
@@ -344,6 +366,25 @@ class CustomRomItem:
     rom_relative_path: str = ""
 
 
+@dataclass
+class SdRomCandidate:
+    path: Path
+    system: str
+    title: str
+    relative: str
+    libretro_art_name: str | None
+
+
+@dataclass
+class SdArtworkMatch:
+    path: Path
+    system: str
+    art_name: str
+    relative: str
+    provider: str = "Libretro"
+    image_data: bytes | None = None
+
+
 def validate_custom_art_name(value: str) -> str:
     name = value.strip()
     if name.lower().endswith(".bmp"):
@@ -404,13 +445,28 @@ class Providers:
     ) -> list[ProviderResult]:
         provider = provider_key(provider)
         if provider == "Libretro":
-            return self.search_libretro_many(query, max_results, libretro_source, system)
+            try:
+                libretro_results = self.search_libretro_many(query, max_results, libretro_source, system)
+                usable_results = [
+                    result for result in libretro_results if is_valid_image_data(result.image_data)
+                ]
+                if usable_results:
+                    return usable_results
+                raise LookupError("Libretro returned no usable image data for this match.")
+            except Exception as libretro_error:
+                try:
+                    return self.search_thegamesdb_many(query, max_results, system=system)
+                except Exception as fallback_error:
+                    raise LookupError(
+                        f"Libretro did not return usable artwork for {query!r} ({libretro_error}).\n\n"
+                        f"TheGamesDB fallback was also unsuccessful: {fallback_error}"
+                    ) from fallback_error
         if provider == "Local Pack":
             return self.search_local_pack_many(query, max_results)
         if provider == "IGDB":
             return self.search_igdb_many(query, max_results)
         if provider == "TheGamesDB":
-            return self.search_thegamesdb_many(query, max_results)
+            return self.search_thegamesdb_many(query, max_results, system=system)
         if provider == "ScreenScraper":
             return self.search_screenscraper_many(query, max_results)
         raise ValueError(f"Unknown provider: {provider}")
@@ -704,37 +760,144 @@ class Providers:
             raise LookupError("No IGDB artwork found.")
         return results[:max_results]
 
-    def search_thegamesdb_many(self, query: str, max_results: int = 20) -> list[ProviderResult]:
+    @staticmethod
+    def _platform_key(name: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(name).casefold())
+
+    def thegamesdb_platforms(self) -> dict[str, int]:
+        """Load TheGamesDB platform names/IDs, caching them for 30 days."""
         api_key = self.app.tgdb_key_var.get().strip()
         if not api_key:
-            raise LookupError("TheGamesDB needs an API key.")
+            raise LookupError(
+                "Automatic TheGamesDB fallback requires an API key. Add it under Settings → Provider Credentials."
+            )
+        cache_path = self.app.base_dir / CACHE_FOLDER_NAME / "thegamesdb_platforms.json"
+        if cache_path.is_file():
+            try:
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                age = time.time() - float(cached.get("fetched_at", 0))
+                raw = cached.get("platforms")
+                if age < 30 * 24 * 60 * 60 and isinstance(raw, dict) and raw:
+                    return {str(name): int(platform_id) for name, platform_id in raw.items()}
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+
+        params = urllib.parse.urlencode({"apikey": api_key})
+        response = request_json(f"{THEGAMESDB_BASE_URL}/v1/Platforms?{params}", WEB_HEADERS)
+        platform_data = response.get("data", {}).get("platforms") or {}
+        entries = []
+        if isinstance(platform_data, dict):
+            for key, value in platform_data.items():
+                if not isinstance(value, dict):
+                    continue
+                platform_id = value.get("id", key)
+                name = value.get("name") or value.get("platform_name")
+                if name and str(platform_id).isdigit():
+                    entries.append((str(name), int(platform_id)))
+        elif isinstance(platform_data, list):
+            for value in platform_data:
+                if not isinstance(value, dict):
+                    continue
+                platform_id = value.get("id")
+                name = value.get("name") or value.get("platform_name")
+                if name and str(platform_id).isdigit():
+                    entries.append((str(name), int(platform_id)))
+        if not entries:
+            raise LookupError("TheGamesDB returned no usable platform list.")
+
+        platforms = {name: platform_id for name, platform_id in entries}
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps({"fetched_at": time.time(), "platforms": platforms}, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        return platforms
+
+    def thegamesdb_platform_id(self, system: str) -> int:
+        aliases = THEGAMESDB_PLATFORM_ALIASES.get(system, (system,))
+        platforms = self.thegamesdb_platforms()
+        by_normalized = {self._platform_key(name): platform_id for name, platform_id in platforms.items()}
+        for alias in aliases:
+            found = by_normalized.get(self._platform_key(alias))
+            if found is not None:
+                return found
+        raise LookupError(
+            f"TheGamesDB does not list a known platform mapping for {system}. "
+            "No cross-console search was performed to avoid attaching artwork from the wrong system."
+        )
+
+    def search_thegamesdb_many(
+        self,
+        query: str,
+        max_results: int | None = 20,
+        system: str = DEFAULT_SYSTEM,
+    ) -> list[ProviderResult]:
+        api_key = self.app.tgdb_key_var.get().strip()
+        if not api_key:
+            raise LookupError("TheGamesDB fallback needs an API key. Add one under Settings → Provider Credentials.")
+        platform_id = self.thegamesdb_platform_id(system)
         params = urllib.parse.urlencode(
             {
                 "apikey": api_key,
                 "name": query,
-                "filter[platform]": "Game Boy Advance",
-                "include": "boxart",
+                "filter[platform]": str(platform_id),
+                "include": "boxart,platform",
             }
         )
-        data = request_json(f"https://api.thegamesdb.net/v1/Games/ByGameName?{params}", WEB_HEADERS)
-        games = data.get("data", {}).get("games") or []
+        data = request_json(f"{THEGAMESDB_BASE_URL}/v1.1/Games/ByGameName?{params}", WEB_HEADERS)
+        payload = data.get("data", {})
+        games = payload.get("games") or []
         include = data.get("include", {})
         boxart = include.get("boxart", {})
         base = boxart.get("base_url", {}).get("original") or boxart.get("base_url", {}).get("large") or ""
         images = boxart.get("data") or boxart.get("images") or {}
-        results = []
+        results: list[ProviderResult] = []
+        limit = 20 if max_results is None else max_results
+
+        def image_priority(image: dict) -> tuple[int, str]:
+            side = str(image.get("side") or image.get("type") or "").casefold()
+            filename = str(image.get("filename") or image.get("url") or "").casefold()
+            is_front = side == "front" or "/front/" in filename or filename.startswith("front/")
+            is_back = side == "back" or "/back/" in filename or filename.startswith("back/")
+            return (0 if is_front else 2 if is_back else 1, filename)
+
         for game in games:
-            game_id = str(game.get("id"))
-            game_images = images.get(game_id) or []
-            for image in game_images:
-                filename = image.get("filename") or image.get("thumb")
-                if filename:
-                    results.append(ProviderResult("TheGamesDB", f"{game.get('game_title', query)} - {filename}", fetch_bytes(base + filename)))
-                    if len(results) >= max_results:
-                        return results
+            game_title = str(game.get("game_title") or game.get("name") or query)
+            # Do not accept a sequel/remake simply because the API's search is fuzzy.
+            if title_match_score(query, game_title) < 1.6 or not title_search_compatible(query, game_title):
+                continue
+            game_id = str(game.get("id", ""))
+            game_images = images.get(game_id) or images.get(str(game.get("id", ""))) or []
+            if isinstance(game_images, dict):
+                game_images = list(game_images.values())
+            if not isinstance(game_images, list):
+                continue
+            for image in sorted((image for image in game_images if isinstance(image, dict)), key=image_priority):
+                image_path = image.get("filename") or image.get("url") or image.get("thumb")
+                if not image_path:
+                    continue
+                image_path = str(image_path).strip()
+                if image_path.startswith(("http://", "https://")):
+                    image_url = image_path
+                elif image_path.startswith("/images/"):
+                    image_url = urllib.parse.urljoin(base, image_path)
+                else:
+                    image_url = urllib.parse.urljoin(base, image_path.lstrip("/"))
+                try:
+                    image_data = fetch_bytes(image_url)
+                    if not is_valid_image_data(image_data):
+                        continue
+                except Exception:
+                    continue
+                results.append(ProviderResult("TheGamesDB", f"{game_title} - {Path(str(image_path)).name}", image_data, system))
+                if len(results) >= limit:
+                    return results
         if not results:
-            raise LookupError("No TheGamesDB box art found.")
-        return results[:max_results]
+            raise LookupError(f"No TheGamesDB box art match found for {query!r} on {system}.")
+        return results
 
     def search_screenscraper_many(self, query: str, max_results: int = 20) -> list[ProviderResult]:
         devid = self.app.ss_dev_id_var.get().strip()
@@ -779,6 +942,11 @@ class Providers:
 
 
 def crop_image(image: Image.Image, size: tuple[int, int], crop: CropSettings) -> Image.Image:
+    # Square box-art output should contain (not crop) distinctly portrait or
+    # landscape source art. Title-art and near-square sources keep legacy crop.
+    if should_fit_art(image, size):
+        return fit_image_to_canvas(image, size, crop.zoom, crop.x, crop.y)
+
     image = image.convert("RGB")
     target_w, target_h = size
     min_scale = max(target_w / image.width, target_h / image.height)
@@ -1411,7 +1579,7 @@ class ThumbnailScraperApp(tk.Tk):
             ("Local pack folder", self.local_pack_var, "folder", False),
             ("IGDB Client ID", self.igdb_client_var, None, False),
             ("IGDB access token", self.igdb_token_var, None, False),
-            ("TheGamesDB API key", self.tgdb_key_var, None, False),
+            ("TheGamesDB API key (automatic fallback)", self.tgdb_key_var, None, False),
             ("ScreenScraper developer ID", self.ss_dev_id_var, None, False),
             ("ScreenScraper developer password", self.ss_dev_pass_var, None, True),
             ("ScreenScraper username", self.ss_user_var, None, False),
@@ -2164,7 +2332,7 @@ class ThumbnailScraperApp(tk.Tk):
                 existing_items[(relative_key, item.size)] = (index, item)
                 existing_items_by_relative.setdefault(relative_key, []).append((index, item))
 
-        matches: list[tuple[Path, str, str, str]] = []
+        candidates: list[SdRomCandidate] = []
         unmatched: list[str] = []
         seen_targets: set[str] = set()
 
@@ -2190,11 +2358,11 @@ class ThumbnailScraperApp(tk.Tk):
             if target_key in seen_targets:
                 continue
             seen_targets.add(target_key)
-            art_name = self.providers.find_libretro_art_name(target_name, system, folder)
-            if art_name:
-                matches.append((path, system, art_name, relative))
-            else:
-                unmatched.append(f"{system}: {path.name}")
+            try:
+                art_name = self.providers.find_libretro_art_name(target_name, system, folder)
+            except Exception:
+                art_name = None
+            candidates.append(SdRomCandidate(path, system, target_name, relative, art_name))
 
         # Resolve candidate directories once per size; thousands of ROMs should
         # not trigger thousands of repeated directory listings.
@@ -2203,14 +2371,14 @@ class ThumbnailScraperApp(tk.Tk):
             for size in set(size_names)
         }
 
-        # Determine which ROM/size pairs actually need work before downloading.
-        # Valid entries already in settings, installed SD folders, or previous
-        # generated IMGS/IMGS2 folders are not fetched or added again.
+        # Decide which ROM/size pairs need work before attempting fallback search.
+        # This avoids querying or downloading fallback art for complete existing
+        # IMGS/IMGS2 output on subsequent scans.
         needed_sizes: dict[str, set[str]] = {}
         updates: dict[int, str] = {}
         skipped_existing = 0
-        for path, system, art_name, relative in matches:
-            target_key = relative.casefold()
+        for candidate in candidates:
+            target_key = candidate.relative.casefold()
             missing: set[str] = set()
             for size in size_names:
                 key = (target_key, size)
@@ -2221,7 +2389,7 @@ class ThumbnailScraperApp(tk.Tk):
                         skipped_existing += 1
                         continue
                 output_path = self.existing_sd_thumbnail(
-                    root, relative, size, output_roots_by_size[size]
+                    root, candidate.relative, size, output_roots_by_size[size]
                 )
                 if output_path is not None:
                     if item_entry:
@@ -2232,130 +2400,187 @@ class ThumbnailScraperApp(tk.Tk):
             if missing:
                 needed_sizes[target_key] = missing
 
-        # Keep the per-game size requirements attached to the matched ROM path.
-        needed_art: set[tuple[str, str]] = set()
-        for _path, system, art_name, relative in matches:
-            if needed_sizes.get(relative.casefold()):
-                needed_art.add((system, art_name))
+        matches: list[SdArtworkMatch] = []
+        tgdb_key_var = self.__dict__.get("tgdb_key_var")
+        tgdb_key_available = bool(tgdb_key_var and tgdb_key_var.get().strip())
+        for candidate in candidates:
+            target_key = candidate.relative.casefold()
+            art_name = candidate.libretro_art_name
+            if art_name:
+                matches.append(
+                    SdArtworkMatch(candidate.path, candidate.system, art_name, candidate.relative, "Libretro")
+                )
+                continue
+            # If no new thumbnail is needed, don't make a fallback API request.
+            if not needed_sizes.get(target_key):
+                continue
+            if not tgdb_key_available:
+                unmatched.append(
+                    f"{candidate.system}: {candidate.path.name} (no Libretro match; add a TheGamesDB API key in Settings for fallback)"
+                )
+                continue
+            try:
+                fallback = self.providers.search_thegamesdb_many(
+                    candidate.title, max_results=1, system=candidate.system
+                )
+                if not fallback or not is_valid_image_data(fallback[0].image_data):
+                    raise LookupError("TheGamesDB returned no usable box art")
+                result = fallback[0]
+                matches.append(
+                    SdArtworkMatch(
+                        candidate.path,
+                        candidate.system,
+                        result.label,
+                        candidate.relative,
+                        "TheGamesDB",
+                        result.image_data,
+                    )
+                )
+            except Exception as exc:
+                unmatched.append(f"{candidate.system}: {candidate.path.name} (TheGamesDB fallback: {exc})")
 
-        downloaded: dict[tuple[str, str], bytes] = {}
-        cache_paths: dict[tuple[str, str], Path] = {}
+        # Cache identity includes the provider, console and Libretro art folder.
+        # The same title can therefore have separate images from each provider.
+        match_key = lambda match: (match.provider, match.system, match.art_name)
+        matches_by_art: dict[tuple[str, str, str], SdArtworkMatch] = {}
+        needed_art: set[tuple[str, str, str]] = set()
+        for match in matches:
+            key = match_key(match)
+            matches_by_art.setdefault(key, match)
+            if needed_sizes.get(match.relative.casefold()):
+                needed_art.add(key)
+
+        downloaded: dict[tuple[str, str, str], bytes] = {}
+        cache_paths: dict[tuple[str, str, str], Path] = {}
         download_errors: list[str] = []
         cache_hits = 0
-        # Previous scraper versions cached matched artwork by content hash and
-        # referenced that path from CustomRomItem settings. Reuse those local
-        # images when a scan now needs another thumbnail size for the same ROM.
-        prior_item_cache_by_art: dict[tuple[str, str], Path] = {}
-        for path, system, art_name, relative in matches:
-            if not needed_sizes.get(relative.casefold()):
+        # Previous scraper versions cached source images as CustomRomItem paths.
+        prior_item_cache_by_art: dict[tuple[str, str, str], Path] = {}
+        for match in matches:
+            key = match_key(match)
+            if key not in needed_art:
                 continue
-            for _index, item in existing_items_by_relative.get(relative.casefold(), []):
+            for _index, item in existing_items_by_relative.get(match.relative.casefold(), []):
                 if item.image_path and is_valid_image_file(item.image_path):
-                    prior_item_cache_by_art.setdefault((system, art_name), Path(item.image_path))
+                    prior_item_cache_by_art.setdefault(key, Path(item.image_path))
                     break
-        if needed_art:
-            self.after(0, lambda: self.status_var.set(f"Checking cached artwork for {len(needed_art)} matches..."))
-            for key in sorted(needed_art):
-                system, art_name = key
-                cache_path = self.sd_scan_cache_path(folder, system, art_name)
-                cache_paths[key] = cache_path
-                if is_valid_image_file(cache_path):
-                    try:
-                        cached_data = cache_path.read_bytes()
-                    except OSError:
-                        cached_data = b""
-                    if is_valid_image_data(cached_data):
-                        downloaded[key] = cached_data
+
+        for key in sorted(needed_art):
+            provider, system, art_name = key
+            cache_source = folder if provider == "Libretro" else "TheGamesDB"
+            cache_path = self.sd_scan_cache_path(cache_source, system, art_name)
+            cache_paths[key] = cache_path
+            if is_valid_image_file(cache_path):
+                try:
+                    cached_data = cache_path.read_bytes()
+                except OSError:
+                    cached_data = b""
+                if is_valid_image_data(cached_data):
+                    downloaded[key] = cached_data
+                    cache_hits += 1
+                    continue
+                try:
+                    cache_path.unlink()
+                except OSError:
+                    pass
+
+            # Migrate/reuse a prior source-image cache if one is associated with
+            # this ROM entry. This also avoids re-downloading when only size changes.
+            legacy_path = prior_item_cache_by_art.get(key)
+            if legacy_path and is_valid_image_file(legacy_path):
+                try:
+                    legacy_data = legacy_path.read_bytes()
+                    if is_valid_image_data(legacy_data):
+                        self.cache_sd_scan_image(cache_path, legacy_data)
+                        downloaded[key] = cache_path.read_bytes()
                         cache_hits += 1
                         continue
-                    try:
-                        cache_path.unlink()
-                    except OSError:
-                        pass
+                except (OSError, ValueError, SyntaxError):
+                    pass
+            if cache_path.exists() and not is_valid_image_file(cache_path):
+                try:
+                    cache_path.unlink()
+                except OSError:
+                    pass
 
-                # Migrate/reuse the content-addressed cache from v1.6.1 when a
-                # previous custom entry already has a usable source image.
-                legacy_path = prior_item_cache_by_art.get(key)
-                if legacy_path and is_valid_image_file(legacy_path):
-                    try:
-                        legacy_data = legacy_path.read_bytes()
-                        if is_valid_image_data(legacy_data):
-                            self.cache_sd_scan_image(cache_path, legacy_data)
-                            downloaded[key] = cache_path.read_bytes()
-                            cache_hits += 1
-                            continue
-                    except (OSError, ValueError, SyntaxError):
-                        pass
-                if cache_path.exists() and not is_valid_image_file(cache_path):
-                    try:
-                        cache_path.unlink()
-                    except OSError:
-                        pass
+            # TheGamesDB search already downloaded and validated its selected
+            # image. Persist those bytes directly; don't fetch the same URL again.
+            match = matches_by_art[key]
+            if match.provider == "TheGamesDB" and match.image_data:
+                data = match.image_data
+                downloaded[key] = data
+                try:
+                    self.cache_sd_scan_image(cache_path, data)
+                    downloaded[key] = cache_path.read_bytes()
+                except Exception as exc:
+                    download_errors.append(
+                        f"{system}: {display_libretro_name(art_name)} (cache write failed: {exc})"
+                    )
 
-            to_download = needed_art - set(downloaded)
-            if to_download:
-                self.after(0, lambda count=len(to_download): self.status_var.set(f"Downloading {count} uncached images..."))
-                with ThreadPoolExecutor(max_workers=8) as executor:
-                    future_to_art = {
-                        executor.submit(http_get, libretro_raw_url(system, folder, art_name)): (system, art_name)
-                        for system, art_name in sorted(to_download)
-                    }
-                    for future in as_completed(future_to_art):
-                        key = future_to_art[future]
-                        system, art_name = key
-                        url = libretro_raw_url(system, folder, art_name)
-                        first_attempt = True
-                        while True:
-                            try:
-                                if first_attempt:
-                                    first_attempt = False
-                                    data = future.result()
-                                else:
-                                    data = http_get(url)
-                                if not is_valid_image_data(data):
-                                    raise ValueError("Provider returned invalid or incomplete image data")
-                            except Exception as exc:
-                                action = self.ask_sd_download_retry_skip(system, art_name, exc)
-                                if action == "retry":
-                                    # The original future has already completed, so
-                                    # retry this one URL directly while the rest of
-                                    # the library's downloads continue in the pool.
-                                    continue
-                                download_errors.append(
-                                    f"{system}: {display_libretro_name(art_name)} (skipped after download error: {exc})"
-                                )
-                                break
-                            downloaded[key] = data
-                            try:
-                                cache_path = cache_paths[key]
-                                self.cache_sd_scan_image(cache_path, data)
-                                # Use the normalized persistent PNG bytes on future runs.
-                                downloaded[key] = cache_path.read_bytes()
-                            except Exception as exc:
-                                # A valid response can still fail to persist (for
-                                # example, a full disk). Keep the image for this
-                                # scan and report the cache problem without aborting.
-                                download_errors.append(
-                                    f"{system}: {display_libretro_name(art_name)} (cache write failed: {exc})"
-                                )
+        to_download = needed_art - set(downloaded)
+        # Only Libretro matches need a separate raw-image fetch. Fallback results
+        # carry their validated image bytes already.
+        to_download = {key for key in to_download if key[0] == "Libretro"}
+        if to_download:
+            self.after(0, lambda count=len(to_download): self.status_var.set(f"Downloading {count} uncached Libretro images..."))
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                future_to_art = {
+                    executor.submit(http_get, libretro_raw_url(system, folder, art_name)): key
+                    for key in sorted(to_download)
+                    for _provider, system, art_name in [key]
+                }
+                for future in as_completed(future_to_art):
+                    key = future_to_art[future]
+                    _provider, system, art_name = key
+                    url = libretro_raw_url(system, folder, art_name)
+                    first_attempt = True
+                    while True:
+                        try:
+                            if first_attempt:
+                                first_attempt = False
+                                data = future.result()
+                            else:
+                                data = http_get(url)
+                            if not is_valid_image_data(data):
+                                raise ValueError("Provider returned invalid or incomplete image data")
+                        except Exception as exc:
+                            action = self.ask_sd_download_retry_skip(system, art_name, exc)
+                            if action == "retry":
+                                continue
+                            download_errors.append(
+                                f"{system}: {display_libretro_name(art_name)} (skipped after download error: {exc})"
+                            )
                             break
+                        downloaded[key] = data
+                        try:
+                            cache_path = cache_paths[key]
+                            self.cache_sd_scan_image(cache_path, data)
+                            downloaded[key] = cache_path.read_bytes()
+                        except Exception as exc:
+                            download_errors.append(
+                                f"{system}: {display_libretro_name(art_name)} (cache write failed: {exc})"
+                            )
+                        break
 
         additions: list[CustomRomItem] = []
         matched_files = len(matches)
-        for path, system, art_name, relative in matches:
-            relative_key = relative.casefold()
+        for match in matches:
+            relative_key = match.relative.casefold()
             if not needed_sizes.get(relative_key):
                 continue
-            key_art = (system, art_name)
+            key_art = match_key(match)
             data = downloaded.get(key_art)
             if not data:
                 continue
-            image_path = str(cache_paths.get(key_art) or self.sd_scan_cache_path(folder, system, art_name))
-            # Cache paths are persistent and deterministic. If writing that cache
-            # failed, make a best effort to keep a temporary matched-art cache.
+            cache_source = folder if match.provider == "Libretro" else "TheGamesDB"
+            image_path = str(cache_paths.get(key_art) or self.sd_scan_cache_path(cache_source, match.system, match.art_name))
+            # Cache paths are persistent and deterministic. If writing there
+            # failed, make a best effort to keep a temporary source image cache.
             if not is_valid_image_file(image_path):
                 try:
-                    image_path = self.cache_provider_result(ProviderResult("Libretro", art_name, data, system), folder)
+                    image_path = self.cache_provider_result(
+                        ProviderResult(match.provider, match.art_name, data, match.system), cache_source
+                    )
                 except Exception:
                     continue
             for size in needed_sizes[relative_key]:
@@ -2366,14 +2591,14 @@ class ThumbnailScraperApp(tk.Tk):
                     continue
                 additions.append(
                     CustomRomItem(
-                        str(path),
-                        path.stem,
+                        str(match.path),
+                        match.path.stem,
                         "----",
-                        path.stem,
+                        match.path.stem,
                         image_path=image_path,
                         size=size,
-                        system=system,
-                        rom_relative_path=relative,
+                        system=match.system,
+                        rom_relative_path=match.relative,
                     )
                 )
 
@@ -2999,7 +3224,10 @@ class ThumbnailScraperApp(tk.Tk):
                                 self.set_build_progress((done_count - 1) / len(future_to_art) * 45, summary, f"Partial output saved to:\n{run_dir}")
                                 return
                             try:
-                                downloaded_art[art_key] = future.result()
+                                image_data = future.result()
+                                if not is_valid_image_data(image_data):
+                                    raise ValueError("Libretro returned invalid or incomplete image data")
+                                downloaded_art[art_key] = image_data
                             except Exception as exc:
                                 prefetched_errors[art_key] = exc
                             self.set_build_progress((done_count / len(future_to_art)) * 45, f"Downloading artwork {done_count} of {len(future_to_art)}...", "")
@@ -3032,7 +3260,23 @@ class ThumbnailScraperApp(tk.Tk):
                         if index in prefetched_images:
                             image = Image.open(io.BytesIO(prefetched_images[index]))
                         elif index in prefetched_errors:
-                            raise prefetched_errors[index]
+                            # A game-code match whose CDN object is missing/invalid
+                            # gets one title-based attempt. That search uses the same
+                            # Libretro-first, TheGamesDB-fallback provider path.
+                            direct_error = prefetched_errors[index]
+                            try:
+                                result = self.providers.search(
+                                    "Libretro",
+                                    entry.title,
+                                    libretro_source=self.build_libretro_source_var.get(),
+                                    system=DEFAULT_SYSTEM,
+                                )
+                                image = Image.open(io.BytesIO(result.image_data))
+                            except Exception as fallback_error:
+                                raise LookupError(
+                                    f"Direct Libretro artwork was unavailable ({direct_error}); "
+                                    f"title-based Libretro/TheGamesDB fallback also failed: {fallback_error}"
+                                ) from fallback_error
                         elif self.build_provider_var.get() == "Libretro":
                             result = self.providers.search(self.build_provider_var.get(), entry.title, libretro_source=self.build_libretro_source_var.get())
                             image = Image.open(io.BytesIO(result.image_data))
