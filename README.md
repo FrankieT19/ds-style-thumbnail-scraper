@@ -12,9 +12,10 @@ The [DS Style Manager](https://frankiet19.github.io/omega-de-ds-style-kernel/man
 
 ## Features
 
+- When multiple artwork matches exist, standard retail releases are prioritized over prototype, beta, demo, hack, mod, translation and other variant releases.
 - Cache-first incremental SD scans: reuse completed thumbnails and per-ROM cached source images before online provider lookup
 - Optional ROM hash matching toggle in the SD-scan setup: after name searches fail, calculate CRC32, MD5 and SHA-1 and try TheGamesDB then ScreenScraper (slower; off by default)
-- No-Intro filename cleanup for online queries, removing common region/language/revision and square-bracket dump tags without renaming ROMs or changing output paths
+- No-Intro filename cleanup for online queries that preserves region tags such as (USA), (Europe), and (Japan) while stripping language, revision, status, and square-bracket dump tags without renaming ROMs or changing output paths
 - Responsive region controls: debounce settings saves and Build Pack preview lookups; Search & Preview artwork-priority changes reorder cached results locally without issuing new provider requests
 
 - `120 x 80` title thumbnails for `IMGS`

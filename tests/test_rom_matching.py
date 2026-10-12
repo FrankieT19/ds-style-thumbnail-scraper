@@ -9,16 +9,26 @@ from rom_matching import compute_rom_hashes, strip_nointro_tags
 
 
 class RomMatchingUtilityTests(unittest.TestCase):
-    def test_strips_common_nointro_region_revision_language_and_dump_tags(self):
+    def test_preserves_nointro_region_tags_while_stripping_other_metadata(self):
         self.assertEqual(
             strip_nointro_tags("Sonic the Hedgehog (USA, Europe) (Rev 1) (En,Ja) [!] [b1]"),
-            "Sonic the Hedgehog",
+            "Sonic the Hedgehog (USA, Europe)",
+        )
+        self.assertEqual(
+            strip_nointro_tags("Dragon Warrior (Japan) (Rev A) [!]"),
+            "Dragon Warrior (Japan)",
+        )
+
+    def test_strips_language_and_status_tags_but_keeps_region_tag(self):
+        self.assertEqual(
+            strip_nointro_tags("Tetris (USA) (En) (Beta 2) [b1]"),
+            "Tetris (USA)",
         )
 
     def test_preserves_parenthetical_words_that_are_not_known_release_tags(self):
         self.assertEqual(
             strip_nointro_tags("The Legend (The Lost Levels) (USA)"),
-            "The Legend (The Lost Levels)",
+            "The Legend (The Lost Levels) (USA)",
         )
 
     def test_hashes_crc32_md5_sha1_and_size_in_one_pass(self):

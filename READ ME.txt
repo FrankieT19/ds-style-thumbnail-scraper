@@ -21,7 +21,7 @@ By default, scanned ROM artwork mirrors each ROM's directory path under IMGS and
 
 OPTIONAL ROM HASH MATCHING (v1.10.0)
 
-Before starting Scan SD Card, you can enable "Use ROM hash matching if name searches fail". It is off by default. Existing thumbnails and saved image caches are checked first; name-based matching then follows Libretro > TheGamesDB > ScreenScraper > IGDB. Only when those methods find no usable image does hash mode read the ROM file to calculate CRC32, MD5 and SHA-1 plus file size, then try TheGamesDB and ScreenScraper hash-based lookup. This can take longer because it reads the ROM contents. Common No-Intro region, language, revision/version and square-bracket dump/status tags are removed from online search queries, but the original filenames and output paths are never changed. Compressed archives are not unpacked for hashing; hash lookup applies to the supported ROM file itself.
+Before starting Scan SD Card, you can enable "Use ROM hash matching if name searches fail". It is off by default. Existing thumbnails and saved image caches are checked first; name-based matching then follows Libretro > TheGamesDB > ScreenScraper > IGDB. Only when those methods find no usable image does hash mode read the ROM file to calculate CRC32, MD5 and SHA-1 plus file size, then try TheGamesDB and ScreenScraper hash-based lookup. This can take longer because it reads the ROM contents. No-Intro region tags such as (USA), (Europe), (Japan), and (USA, Europe) are preserved in online search queries; language, revision/version, status, and square-bracket dump tags are cleaned. The original filenames and output paths are never changed. Compressed archives are not unpacked for hashing; hash lookup applies to the supported ROM file itself.
 
 The scraper does not download games or modify ROM files.
 
@@ -52,3 +52,5 @@ During Custom Art SD scans, the scraper validates downloaded artwork before cach
 RETRY AND INCREMENTAL SCANNING (v1.6.2)
 
 If artwork fails to download or the provider returns invalid image data, the scraper displays Retry Download and Skip Image. Successful source images are kept in a persistent cache keyed by console and artwork type. Later scans reuse cached files and skip valid mirrored thumbnails already found under SYSTEM/IMGS, SYSTEM/IMGS2, root-level IMGS/IMGS2, or previous timestamped scraper output. Broken or wrong-sized thumbnails are not treated as complete.
+
+Artwork matching prioritizes standard retail releases over beta, alpha, prototype, demo, hack, mod, fan-translation and other non-retail variants when multiple matches are available.

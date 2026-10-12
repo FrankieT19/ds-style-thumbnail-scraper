@@ -120,7 +120,7 @@ Newly generated BMPs receive the `DST1` signature in reserved BMP header bytes 6
 
 The SD Scan setup dialog now has an opt-in “Use ROM hash matching if name searches fail” toggle, off by default. Existing thumbnails and local source-image caches still take precedence. All online name matching is attempted first in the regular provider order; only after that chain returns no valid image does hash mode stream the ROM file once to compute CRC32, MD5, SHA-1 and file size. TheGamesDB hash lookup is attempted before ScreenScraper’s ROM identification endpoint. Libretro thumbnail lookup and IGDB do not have a documented direct ROM-file hash-to-art endpoint.
 
-For name matching, known No-Intro-style tags (region/language/version/revision parentheses and square-bracket dump/status tags) are removed from a temporary search string. Original ROM names, mirrored output paths and per-ROM cache identities remain untouched. The current implementation hashes the supported ROM file as stored on disk; it does not unpack ZIP/7z/archive contents.
+For name matching, No-Intro region tags such as (USA), (Europe), (Japan), and (USA, Europe) are preserved in the temporary search string so providers can return region-specific releases. Language/version/revision/status parentheses and square-bracket dump/status tags are cleaned. Original ROM names, mirrored output paths and per-ROM cache identities remain untouched. The current implementation hashes the supported ROM file as stored on disk; it does not unpack ZIP/7z/archive contents.
 
 
 ## v1.10.1 region-control responsiveness

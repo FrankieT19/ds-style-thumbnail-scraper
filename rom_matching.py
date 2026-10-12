@@ -31,13 +31,22 @@ STATUS_TAGS = {
 }
 
 
+def _is_region_tag(content: str) -> bool:
+    """Return whether a parenthetical tag identifies one or more regions."""
+    value = re.sub(r"\s+", " ", content.strip().casefold())
+    if value in REGION_TAGS:
+        return True
+    parts = [re.sub(r"\s+", " ", part.strip().casefold()) for part in value.split(",")]
+    return len(parts) > 1 and all(part in REGION_TAGS for part in parts)
+
+
 def _is_release_tag(content: str) -> bool:
     value = re.sub(r"\s+", " ", content.strip().casefold())
     if not value:
         return False
     if value in REGION_TAGS or value in STATUS_TAGS:
         return True
-    # Multi-region and language lists such as "USA, Europe" or "En,Ja".
+    # Multi-language and mixed region/language lists such as "En,Ja".
     parts = [re.sub(r"\s+", " ", part.strip().casefold()) for part in value.split(",")]
     if len(parts) > 1 and all(part in REGION_TAGS or part in LANGUAGE_TAGS for part in parts):
         return True
@@ -53,19 +62,22 @@ def _is_release_tag(content: str) -> bool:
 
 
 def strip_nointro_tags(title: str) -> str:
-    """Return a provider-search title without common No-Intro release tags.
+    """Return a search title with region tags preserved and other metadata cleaned.
 
-    The original ROM filename is never changed; callers should use this value
-    only as the online search query. Square-bracketed dump tags are removed,
-    while parenthetical groups are stripped only when recognized as release
-    metadata.
+    Parenthetical region tags such as (USA), (Europe), (Japan), and (USA, Europe)
+    are retained to keep region-specific provider matches possible. Language,
+    revision/version, status, and square-bracketed dump tags are stripped. The
+    original ROM filename, output path, and cache identity are never changed.
     """
     result = str(title or "").strip()
     # Filename-only, square-bracketed dump flags: [!], [b1], [h], [T+Eng], etc.
     result = re.sub(r"\s*\[[^\]]*\]\s*", " ", result)
 
     def remove_known_parenthetical(match: re.Match[str]) -> str:
-        return " " if _is_release_tag(match.group(1)) else match.group(0)
+        content = match.group(1)
+        if _is_region_tag(content):
+            return match.group(0)
+        return " " if _is_release_tag(content) else match.group(0)
 
     result = re.sub(r"\(([^()]*)\)", remove_known_parenthetical, result)
     result = result.replace("_", " ")

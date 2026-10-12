@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.10.2 - Retail release artwork priority
+
+- Rank the standard retail release ahead of alpha, beta, prototype, demo, test/debug, unreleased, hack, mod, fan-translation, randomizer, bootleg and other non-retail variants when several candidates match a title.
+- Apply variant ranking before result limits in Libretro, TheGamesDB, ScreenScraper and IGDB searches, so a non-retail result returned first by a provider does not win just because only one result was requested.
+- Apply the same retail-first preference to local art-pack and filename-index matching while keeping variants available as fallback choices when no retail artwork exists.
+- Preserve No-Intro region tags in provider search queries while cleaning language, revision/version, status, and dump tags.
+- Prefer explicit ROM CRC/MD5/SHA-1 hash-match results above title-only matches because the checksum match identifies the exact ROM release.
+- Added offline regression tests for variant classification, retail-first selection, retained region tags, and hash-match priority.
+
+
 ## v1.10.1 - Responsive region controls and previews
 
 - Debounced settings writes for Game regions to build and Artwork priority controls, avoiding repeated synchronous serialization while the user clicks rapidly.
@@ -13,7 +23,7 @@
 
 - Added a pre-scan checkbox for optional ROM hash matching. It is off by default and only hashes ROM contents after cached artwork, existing thumbnails, and all name-based provider searches fail.
 - Computes CRC32, MD5, SHA-1 and file size in one streaming read. Hash-based lookup tries TheGamesDB and then ScreenScraper using the detected console/platform; Libretro and IGDB do not expose a direct ROM-file hash artwork lookup.
-- Cleans common No-Intro region, language, revision/version and square-bracket dump/status tags from online search queries, while preserving the original ROM filename, relative output path and cache identity.
+- Preserves common No-Intro region tags in online search queries while cleaning language, revision/version and square-bracket dump/status tags; original ROM filenames, relative output paths and cache identities are unchanged.
 - Added offline tests for filename cleanup, streaming hashes, provider hash parameters, fallback order and the pre-scan toggle.
 
 

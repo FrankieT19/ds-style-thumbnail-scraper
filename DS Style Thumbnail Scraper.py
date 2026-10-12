@@ -43,7 +43,7 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Thumbnail Scraper"
-APP_VERSION = "1.10.1"
+APP_VERSION = "1.10.2"
 OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper output"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
 CONFIG_NAME = "thumbnail_scraper_settings.json"
@@ -322,13 +322,50 @@ def title_search_compatible(query: str, candidate: str) -> bool:
 
 
 def variant_rank(title: str) -> int:
+    """Return a penalty for non-standard releases; lower always wins.
+
+    Provider APIs and filename indexes often return prototypes, demos, hacks,
+    translations, and other non-retail variants alongside the retail game. Keep
+    these candidates available for manual preview, but rank an unmarked retail
+    release ahead of them when choosing a default result.
+    """
+    value = str(title or "").casefold().replace("_", " ")
+
+    # A provider response explicitly marked as a ROM checksum match is an
+    # exact-identity match, so it outranks even an otherwise unmarked retail
+    # title. Hashing remains opt-in and is only queried after name matching fails.
+    if re.search(r"\brom\s+(?:crc|md5|sha-?1|hash)\s+match\b", value):
+        return -100
+
     rank = 0
-    if "Virtual Console" in title:
+
+    # Official rereleases/alternate revisions are less preferred than the
+    # original retail title, but are ranked ahead of obvious non-retail builds.
+    if re.search(r"\bvirtual[ -]?console\b", value):
         rank += 2
-    if any(marker in title for marker in ("(Proto", "(Beta", "(Demo")):
-        rank += 3
-    if "(Alt)" in title:
+    if re.search(r"\b(?:alt|alternate|alternative)(?:\s*\d+)?\b", value):
         rank += 4
+    if re.search(r"\brev(?:ision)?\s*\d+\b", value):
+        rank += 2
+
+    development_variant = re.search(
+        r"\b(?:alpha|beta|proto(?:type)?|demo|sample|preview|unreleased|internal|"
+        r"debug|wip|test(?:\s+(?:build|version|rom))?|development(?:\s+(?:build|version))?|"
+        r"dev[ -]?build|pre[ -]?release|work[ -]?in[ -]?progress)\b",
+        value,
+    )
+    modified_variant = re.search(
+        r"\b(?:rom[ -]?hack|hack(?:ed|ing)?|mod(?:ded|ification)?|randomi[sz]er|"
+        r"fan[ -]?translation|translation|translated|bootleg|pirate|trainer|patched|"
+        r"redux|remix|homebrew|cheat(?:ed)?|repacked?)\b",
+        value,
+    )
+    # Common GoodTools/ROM-set tags for hacks, bad dumps, and fan translations.
+    dump_tag = re.search(r"\[(?:h\d*|b\d*|t\d?(?:[+-][a-z]{2,5})?)\]", value)
+    if development_variant:
+        rank += 5
+    if modified_variant or dump_tag:
+        rank += 6
     return rank
 
 
@@ -758,7 +795,11 @@ class Providers:
                     for name in self.get_libretro_index(system, folder)
                     if not use_region_filter or self.app.region_allowed(name)
                 ],
-                key=lambda name: (self.app.region_priority(name) if use_region_filter else 0, name),
+                key=lambda name: (
+                    variant_rank(name),
+                    self.app.region_priority(name) if use_region_filter else 0,
+                    name.casefold(),
+                ),
             )
             exact_index: dict[str, str] = {}
             for name in allowed_index:
@@ -769,14 +810,20 @@ class Providers:
     def find_libretro_art_name(self, query: str, system: str, folder: str) -> str | None:
         # SD scanning follows the files that are actually installed. Pack-region
         # preferences must not hide a World, Japan, or other regional ROM here.
-        allowed_index = sorted(self.get_libretro_index(system, folder))
+        allowed_index = sorted(
+            self.get_libretro_index(system, folder),
+            key=lambda name: (variant_rank(name), name.casefold()),
+        )
         literal_index = {Path(name).stem.casefold(): name for name in allowed_index}
         exact_index: dict[str, str] = {}
         for name in allowed_index:
             exact_index.setdefault(normalize_for_match(name), name)
-        exact = literal_index.get(Path(query).stem.casefold())
-        if not exact:
-            exact = exact_index.get(normalize_for_match(query))
+        exact_literal = literal_index.get(Path(query).stem.casefold())
+        # An exact beta/prototype/hack filename should not defeat an available
+        # retail artwork file with the same normalized game title.
+        if exact_literal and variant_rank(exact_literal) == 0:
+            return exact_literal
+        exact = exact_index.get(normalize_for_match(query)) or exact_literal
         if exact:
             return exact
         extension = LIBRETRO_SYSTEMS.get(system, LIBRETRO_SYSTEMS[DEFAULT_SYSTEM])["extensions"][0]
@@ -821,10 +868,10 @@ class Providers:
                 scored.append((score, name))
         scored.sort(
             key=lambda item: (
+                variant_rank(item[1]),
                 -item[0],
                 self.app.region_priority(item[1]) if system == DEFAULT_SYSTEM else 0,
-                variant_rank(item[1]),
-                item[1],
+                item[1].casefold(),
             )
         )
         if not scored:
@@ -883,7 +930,10 @@ class Providers:
         folder = LIBRETRO_SOURCE_FOLDERS.get(libretro_source, "Named_Boxarts")
         exact_index, _allowed_index = self.libretro_match_index(DEFAULT_SYSTEM, folder)
         art_by_code_root: dict[str, tuple[str, str]] = {}
-        for entry in sorted(self.app.get_game_library(), key=lambda item: (self.app.region_priority(item.title), item.title)):
+        for entry in sorted(
+            self.app.get_game_library(),
+            key=lambda item: (variant_rank(item.title), self.app.region_priority(item.title), item.title.casefold()),
+        ):
             if not entry.code or not self.app.region_allowed(entry.title):
                 continue
             art_name = exact_index.get(normalize_for_match(entry.path.name))
@@ -942,7 +992,10 @@ class Providers:
             )
         }
         if matched_code_roots:
-            for entry in sorted(library, key=lambda item: (self.app.region_priority(item.title), item.title)):
+            for entry in sorted(
+                library,
+                key=lambda item: (variant_rank(item.title), self.app.region_priority(item.title), item.title.casefold()),
+            ):
                 if entry.code[:3] in matched_code_roots and self.app.region_allowed(entry.title):
                     queries.append(entry.title)
 
@@ -966,10 +1019,10 @@ class Providers:
                     candidates.append((score, art))
         candidates.sort(
             key=lambda item: (
+                variant_rank(str(item[1].path)),
                 self.app.region_priority(self.local_art_region_text(item[1])),
                 -item[0],
-                variant_rank(item[1].path.name),
-                item[1].path.name,
+                item[1].path.name.casefold(),
             ),
         )
         if not candidates:
@@ -1090,6 +1143,14 @@ class Providers:
         games = post_json("https://api.igdb.com/v4/games", body, headers)
         if not isinstance(games, list):
             raise LookupError("IGDB returned an unexpected game-search response.")
+        games = sorted(
+            (game for game in games if isinstance(game, dict)),
+            key=lambda game: (
+                variant_rank(str(game.get("name") or query)),
+                -title_match_score(query, str(game.get("name") or query)),
+                str(game.get("name") or query).casefold(),
+            ),
+        )
         results: list[ProviderResult] = []
         limit = 20 if max_results is None else max(1, int(max_results))
         for game in games:
@@ -1239,6 +1300,14 @@ class Providers:
         data = request_json(f"{THEGAMESDB_BASE_URL}/v1.1/Games/ByGameName?{params}", WEB_HEADERS)
         payload = data.get("data", {})
         games = payload.get("games") or []
+        games = sorted(
+            (game for game in games if isinstance(game, dict)),
+            key=lambda game: (
+                variant_rank(str(game.get("game_title") or game.get("name") or query)),
+                -title_match_score(query, str(game.get("game_title") or game.get("name") or query)),
+                str(game.get("game_title") or game.get("name") or query).casefold(),
+            ),
+        )
         include = data.get("include", {})
         boxart = include.get("boxart", {})
         base = boxart.get("base_url", {}).get("original") or boxart.get("base_url", {}).get("large") or ""
@@ -1495,6 +1564,14 @@ class Providers:
             games = [games]
         if not isinstance(games, list):
             games = []
+        games = sorted(
+            (game for game in games if isinstance(game, dict)),
+            key=lambda game: (
+                variant_rank(str(game.get("nom") or game.get("nom_eu") or game.get("name") or query)),
+                -title_match_score(query, str(game.get("nom") or game.get("nom_eu") or game.get("name") or query)),
+                str(game.get("nom") or game.get("nom_eu") or game.get("name") or query).casefold(),
+            ),
+        )
         results: list[ProviderResult] = []
         limit = 20 if max_results is None else max(1, int(max_results))
         preferred_types = ("box-2D", "box-3D", "wheel-hd", "wheel", "sstitle", "screenmarquee", "steamgrid")

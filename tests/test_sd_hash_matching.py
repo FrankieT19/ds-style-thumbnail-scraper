@@ -77,8 +77,8 @@ class SdHashMatchingTests(unittest.TestCase):
             result = app._scan_sd_worker(root, "Box Art", ["80x80"], False, use_hash_matching=False)
 
             self.assertEqual(app.providers.hash_calls, [])
-            self.assertEqual(app.providers.query_names[0][0], "Tetris")
-            self.assertEqual(app.providers.query_names[1][0], "Tetris")
+            self.assertEqual(app.providers.query_names[0][0], "Tetris (USA)")
+            self.assertEqual(app.providers.query_names[1][0], "Tetris (USA)")
             self.assertEqual(result["additions"], [])
             self.assertEqual(len(result["unmatched"]), 1)
             self.assertTrue(rom.is_file())
@@ -94,8 +94,8 @@ class SdHashMatchingTests(unittest.TestCase):
 
             result = app._scan_sd_worker(root, "Box Art", ["80x80"], False, use_hash_matching=True)
 
-            self.assertEqual([query[0] for query in app.providers.query_names], ["Tetris", "Tetris"])
-            self.assertEqual(app.providers.hash_calls, [(rom, "Tetris", "Game Boy")])
+            self.assertEqual([query[0] for query in app.providers.query_names], ["Tetris (USA)", "Tetris (USA)"])
+            self.assertEqual(app.providers.hash_calls, [(rom, "Tetris (USA)", "Game Boy")])
             self.assertEqual(result["matched_files"], 1)
             self.assertEqual(len(result["additions"]), 1)
             self.assertEqual(result["additions"][0].system, "Game Boy")
