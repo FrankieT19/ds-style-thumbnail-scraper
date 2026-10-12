@@ -56,6 +56,7 @@ class ThumbnailRenderingTests(unittest.TestCase):
             path = Path(temp) / "fitted.bmp"
             write_ezflash_bmp(fitted, path)
             data = path.read_bytes()
+        self.assertEqual(data[6:10], b"DST1", "padded artwork must opt in to kernel color-key transparency")
         pixel_offset = struct.unpack_from("<I", data, 10)[0]
         # Output BMP is top-down RGB555, each pixel is a little-endian word.
         corner_word = struct.unpack_from("<H", data, pixel_offset)[0]
@@ -63,6 +64,22 @@ class ThumbnailRenderingTests(unittest.TestCase):
         center_word = struct.unpack_from("<H", data, center_offset)[0]
         self.assertEqual(corner_word, 0x0000, "canvas must use the kernel's black color key")
         self.assertEqual(center_word, (1 << 10) | (1 << 5) | 1, "source black should become RGB555 #080808")
+
+    def test_opaque_legacy_artwork_does_not_receive_transparency_marker(self):
+        opaque = Image.new("RGB", (80, 80), (0, 0, 0))
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "opaque.bmp"
+            write_ezflash_bmp(opaque, path)
+            data = path.read_bytes()
+        self.assertEqual(data[6:10], b"\x00\x00\x00\x00")
+
+    def test_transparency_marker_can_be_explicitly_suppressed(self):
+        padded = fit_image_to_canvas(Image.new("RGB", (20, 40), (120, 90, 60)), (80, 80))
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "unmarked.bmp"
+            write_ezflash_bmp(padded, path, mark_transparency=False)
+            data = path.read_bytes()
+        self.assertEqual(data[6:10], b"\x00\x00\x00\x00")
 
 
 if __name__ == "__main__":

@@ -201,9 +201,24 @@ def prepare_image(
         return ImageOps.fit(image, size, method=Image.Resampling.LANCZOS, centering=centering)
 
 
-def write_ezflash_bmp(image: Image.Image, path: Path) -> None:
-    """Write an Omega-style top-down 16-bit BMP with GBA BGR555 pixel words."""
+TRANSPARENT_THUMBNAIL_MARKER = b"DST1"
+
+
+def write_ezflash_bmp(image: Image.Image, path: Path, *, mark_transparency: bool | None = None) -> None:
+    """Write an Omega-style top-down 16-bit BMP with GBA BGR555 pixel words.
+
+    If the image has transparent pixels, mark it with ``DST1`` in the BMP's
+    reserved header bytes so the compatible DS Style kernel knows that RGB555
+    zero is an intentional transparency key. Opaque legacy/GBA artwork remains
+    unmarked, preserving its existing black pixels and rendering behavior.
+    ``mark_transparency`` can be set explicitly by callers that need to force
+    or suppress the marker; by default it follows the image's alpha channel.
+    """
     width, height = image.size
+    if mark_transparency is None:
+        mark_transparency = False
+        if "A" in image.getbands():
+            mark_transparency = image.getchannel("A").getextrema()[0] < 128
     row_bytes = width * 2
     padding = (4 - row_bytes % 4) % 4
     pixel_data_size = (row_bytes + padding) * height
@@ -212,6 +227,10 @@ def write_ezflash_bmp(image: Image.Image, path: Path) -> None:
     header = bytearray()
     header.extend(b"BM")
     header.extend(struct.pack("<IHHI", file_size, 0, 0, 54))
+    if mark_transparency:
+        # The compatible kernel recognizes only explicitly tagged artwork.
+        # Offsets 6..9 are the two reserved words in a standard BMP file header.
+        header[6:10] = TRANSPARENT_THUMBNAIL_MARKER
     header.extend(
         struct.pack(
             "<IiiHHIIiiII",

@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.9.2 - Selective transparent thumbnail marker
+
+- Mark only BMP outputs that contain intentional transparent canvas pixels with `DST1` in the reserved BMP header bytes expected by compatible kernel builds.
+- Keep opaque GBA and legacy CUSTOM BMP outputs unmarked, preserving their current color-key behavior.
+- Add regression coverage for marked padded artwork and unmarked opaque images.
+
+
 ## v1.9.1
 
 - Made the SD-card scan strictly cache-first: already-built, valid IMGS/IMGS2 thumbnails are detected before provider matching; existing custom-entry image files and a durable per-ROM source-image cache are checked before Libretro, TheGamesDB, ScreenScraper or IGDB are queried.

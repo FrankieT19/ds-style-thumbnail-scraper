@@ -109,3 +109,8 @@ Added offline tests for Libretro→TheGamesDB fallback, platform filtering and i
 - `python -m unittest discover -s tests -v` — 44 tests passed, including five new credential/progress tests.
 - GUI smoke checks under Xvfb — passed: Settings tab loads with TheGamesDB key controls, Show/Hide works, the progress window updates between indeterminate/determinate phases, a Custom Art build generates a BMP in the background, and an SD scan reports progress and completes successfully.
 - The Windows executable was not rebuilt in this Linux environment, and the live TheGamesDB key-validation request was covered with mocks rather than tested against a real key.
+
+
+## v1.9.2 selective transparency marker
+
+Newly generated BMPs receive the `DST1` signature in reserved BMP header bytes 6–9 only when their image contains pixels whose alpha is below the writer's transparency threshold. This is intended for aspect-preserving 80×80 box-art output with transparent padding. Opaque output remains unmarked, so existing GBA artwork and legacy CUSTOM artwork keep the old kernel drawing behavior. A compatible kernel build must recognize `DST1`; older kernels ignore the header bytes and will still draw the black padding as black.
