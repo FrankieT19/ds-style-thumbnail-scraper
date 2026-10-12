@@ -1,4 +1,4 @@
-DS STYLE THUMBNAIL SCRAPER v1.5
+DS STYLE THUMBNAIL SCRAPER v1.6.2
 
 For DS Style v7.4 or newer.
 
@@ -13,6 +13,27 @@ Finished artwork is saved in a dated folder inside DS Style Thumbnail Scraper ou
 
 Build complete Game Boy Advance packs from Libretro or a local artwork pack. For other supported systems, choose the console when searching or use Scan SD Card on the Custom Art tab to find artwork only for games already on your card.
 
-Scanned artwork is added to IMGS/CUSTOM and IMGS2/CUSTOM. Each CUSTOM folder supports up to 256 images.
+Failed image downloads now prompt you to Retry Download or Skip Image. Successful source images are cached persistently, and repeat scans skip valid thumbnails already in cache, on the SD card under SYSTEM/IMGS or SYSTEM/IMGS2, or in prior scraper output folders. Corrupt or wrong-sized output thumbnails are regenerated.
+
+By default, scanned ROM artwork mirrors each ROM's directory path under IMGS and IMGS2. The mirrored files do not use the flat CUSTOM index and are not limited to 256 images. "Legacy CUSTOM" remains available for older kernels/workflows and is limited to 256 ordinary indexed images per size. Extension defaults such as CUSTOM/gb.bmp are supported by kernels with the matching artwork changes.
 
 The scraper does not download games or modify ROM files.
+
+
+ARTWORK MIRRORING (v1.6)
+
+In the Custom Art tab, choose "Mirror ROM folders" (recommended), scan the actual SD root, and build. For example, Game Boy/T/Tetris (World).gb becomes IMGS/Game Boy/T/Tetris (World).bmp and IMGS2/Game Boy/T/Tetris (World).bmp. The folder tree in the output matches the ROM tree; the scraper does not automatically reorganize ROMs into letter folders.
+
+Copy the generated IMGS contents to SYSTEM/IMGS and IMGS2 contents to SYSTEM/IMGS2, preserving all subfolders. Scanning from the SD root preserves intermediate grouping folders as well as console and letter folders. This requires a DS Style kernel build that includes mirrored-artwork support; older kernels only use their existing flat CUSTOM lookup.
+
+For an extension-wide default, choose "Enter Name...", enter an extension without the dot (such as gb or nes), set the image and build. It is written as IMGS/CUSTOM/gb.bmp (120x80 title art) or IMGS2/CUSTOM/gb.bmp (80x80 box art).
+
+
+SD SCAN IMAGE-DATA FIX (v1.6.1)
+
+During Custom Art SD scans, the scraper validates downloaded artwork before caching it. If a provider returns an HTML error page, incomplete image or other invalid payload, that entry is skipped and reported in SD Scan Results instead of aborting the entire scan.
+
+
+RETRY AND INCREMENTAL SCANNING (v1.6.2)
+
+If artwork fails to download or the provider returns invalid image data, the scraper displays Retry Download and Skip Image. Successful source images are kept in a persistent cache keyed by console and artwork type. Later scans reuse cached files and skip valid mirrored thumbnails already found under SYSTEM/IMGS, SYSTEM/IMGS2, root-level IMGS/IMGS2, or previous timestamped scraper output. Broken or wrong-sized thumbnails are not treated as complete.

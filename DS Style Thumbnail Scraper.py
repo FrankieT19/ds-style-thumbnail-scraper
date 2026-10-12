@@ -23,6 +23,9 @@ from PIL import Image, ImageTk
 
 from ezflash_gba_full_library import load_gba_library
 from ezflash_gba_pack_converter import build_art_index, find_best_art, iter_art_files
+from thumbnail_output_paths import infer_relative_rom_path, mirrored_thumbnail_path, relative_path_from_root
+from thumbnail_image_data import is_valid_image_data, is_valid_image_file
+
 from ezflash_gba_thumbs import (
     app_dir,
     clean_title,
@@ -37,7 +40,7 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Thumbnail Scraper"
-APP_VERSION = "1.5"
+APP_VERSION = "1.6.2"
 OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper output"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
 CONFIG_NAME = "thumbnail_scraper_settings.json"
@@ -338,6 +341,7 @@ class CustomRomItem:
     size: str = "80x80"
     crop: dict | None = None
     system: str = ""
+    rom_relative_path: str = ""
 
 
 def validate_custom_art_name(value: str) -> str:
@@ -822,6 +826,7 @@ class ThumbnailScraperApp(tk.Tk):
         self.region_listboxes: list[tk.Listbox] = []
         self.exceptions: list[ExceptionRule] = []
         self.custom_roms: list[CustomRomItem] = []
+        self.custom_output_layout_var = tk.StringVar(value="Mirror ROM folders")
         self.custom_preview_photo = None
         self.running = False
         self.cancel_build_requested = False
@@ -1287,7 +1292,7 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Label(self.custom_tab, text="Custom Thumbnail Overrides", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(
             self.custom_tab,
-            text="Add artwork for any supported game file or folder. Scan an SD card to match installed games automatically; ROM files are never edited.",
+            text="Create artwork that mirrors your ROM folders, or use the legacy CUSTOM layout. Scan from the SD root to preserve console and alphabet folders; ROM files are never edited.",
             style="Muted.TLabel",
             wraplength=760,
         ).grid(row=1, column=0, sticky="w", pady=(8, 14))
@@ -1336,8 +1341,23 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Label(actions, text="Selected name").pack(anchor="w")
         self.custom_code_var = tk.StringVar()
         ttk.Entry(actions, textvariable=self.custom_code_var, width=22).pack(anchor="w", fill="x", pady=(4, 8))
-        ttk.Label(actions, text="Must exactly match the filename without its extension, or the folder name.", style="Muted.TLabel", wraplength=170).pack(anchor="w", pady=(0, 4))
-        ttk.Label(actions, text="Up to 256 images can be used in each CUSTOM folder.", style="Muted.TLabel", wraplength=170).pack(anchor="w", pady=(0, 8))
+        ttk.Label(actions, text="CUSTOM art uses this name. Mirror mode always matches the actual ROM filename and folder path.", style="Muted.TLabel", wraplength=170).pack(anchor="w", pady=(0, 4))
+        ttk.Label(actions, text="Artwork output layout").pack(anchor="w")
+        custom_layout_combo = ttk.Combobox(
+            actions,
+            textvariable=self.custom_output_layout_var,
+            values=["Mirror ROM folders", "Legacy CUSTOM"],
+            state="readonly",
+            width=18,
+        )
+        custom_layout_combo.pack(anchor="w", fill="x", pady=(4, 5))
+        custom_layout_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_custom_output_layout_changed())
+        ttk.Label(
+            actions,
+            text="Mirror mode avoids the CUSTOM 256-image limit. Name-only defaults (gb.bmp, nes.bmp, etc.) stay in CUSTOM.",
+            style="Muted.TLabel",
+            wraplength=170,
+        ).pack(anchor="w", pady=(0, 8))
         ttk.Button(actions, text="Apply Name", command=self.apply_custom_code).pack(anchor="w", fill="x", pady=(0, 16))
 
         right = ttk.Frame(body, style="Panel.TFrame")
@@ -1779,6 +1799,11 @@ class ThumbnailScraperApp(tk.Tk):
         self.refresh_result_gallery()
 
     def cache_provider_result(self, result: ProviderResult, source: str = "manual") -> str:
+        if not is_valid_image_data(result.image_data):
+            raise ValueError(
+                f'The artwork provider returned invalid or incomplete image data for "{result.label}". '
+                "Try scanning again or use another artwork source."
+            )
         digest = hashlib.sha256(
             f"{result.system}|{source}|{result.label}".encode("utf-8") + result.image_data
         ).hexdigest()[:24]
@@ -1849,6 +1874,26 @@ class ThumbnailScraperApp(tk.Tk):
         entry.bind("<Return>", lambda _event: add())
         entry.focus_set()
 
+    def custom_art_relative_path(self, item: CustomRomItem) -> str:
+        """Return the ROM-relative path used by mirror mode, when available."""
+        if item.rom_relative_path:
+            return item.rom_relative_path.replace("\\", "/")
+        if item.rom_path and item.system:
+            try:
+                return infer_relative_rom_path(Path(item.rom_path), item.system)
+            except (OSError, ValueError):
+                return ""
+        return ""
+
+    @staticmethod
+    def is_extension_default_name(name: str) -> bool:
+        """Extension defaults are loaded directly by the kernel, outside its index."""
+        supported_extensions = {
+            extension.lstrip(".").casefold()
+            for extension in SYSTEM_BY_EXTENSION
+        }
+        return name.casefold() in supported_extensions
+
     def scan_sd_card(self):
         if self.scan_running:
             return
@@ -1868,7 +1913,7 @@ class ThumbnailScraperApp(tk.Tk):
         )
         ttk.Label(
             dialog,
-            text=f"Scanning: {root}",
+            text=f"Scanning: {root}\nChoose the actual SD root so grouping, console and alphabet folders match the ROM browser path.",
             style="Muted.TLabel",
             wraplength=480,
         ).grid(row=1, column=0, columnspan=2, sticky="w", padx=18, pady=(0, 14))
@@ -1898,7 +1943,7 @@ class ThumbnailScraperApp(tk.Tk):
         ).grid(row=4, column=0, columnspan=2, sticky="w", padx=18, pady=(10, 2))
         ttk.Label(
             dialog,
-            text="GBA artwork is normally supplied by a standard thumbnail pack. Other supported systems use CUSTOM artwork.",
+            text="The scan records each ROM path relative to this folder. Mirrored output reproduces those console and alphabet folders under IMGS / IMGS2.",
             style="Muted.TLabel",
             wraplength=480,
         ).grid(row=5, column=0, columnspan=2, sticky="w", padx=18, pady=(0, 14))
@@ -1954,6 +1999,153 @@ class ThumbnailScraperApp(tk.Tk):
                 found.append((path, system))
         return sorted(found, key=lambda item: str(item[0]).casefold())
 
+    def sd_scan_cache_path(self, source_folder: str, system: str, art_name: str) -> Path:
+        """Stable on-disk cache path for an artwork source match.
+
+        The key includes the system and Libretro artwork folder so the same title
+        can have distinct cached box art, screenshots, and title screens.
+        """
+        identity = f"{system.casefold()}\0{source_folder.casefold()}\0{art_name.casefold()}"
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+        return self.base_dir / CACHE_FOLDER_NAME / "SD scan artwork" / f"{digest}.png"
+
+    def sd_thumbnail_output_roots(self, root: Path, size: str) -> list[Path]:
+        """Return the possible existing output directories for one size.
+
+        Build this list once per scan rather than relisting old build folders for
+        every game, which keeps incremental scans responsive for large libraries.
+        """
+        _width, _height, folder_name = self.size_details(size)
+        output_roots = [Path(root) / "SYSTEM" / folder_name, Path(root) / folder_name]
+        generated_root = self.base_dir / OUTPUT_FOLDER_NAME
+        if generated_root.is_dir():
+            try:
+                previous_runs = sorted(
+                    (entry for entry in generated_root.iterdir() if entry.is_dir()),
+                    key=lambda entry: entry.name.casefold(),
+                    reverse=True,
+                )
+            except OSError:
+                previous_runs = []
+            output_roots.extend(run / folder_name for run in previous_runs)
+        return output_roots
+
+    def existing_sd_thumbnail(
+        self,
+        root: Path,
+        relative: str,
+        size: str,
+        output_roots: list[Path] | None = None,
+    ) -> Path | None:
+        """Find an already-built mirrored thumbnail on the SD or in prior output."""
+        width, height, _folder_name = self.size_details(size)
+        if output_roots is None:
+            output_roots = self.sd_thumbnail_output_roots(root, size)
+
+        checked: set[str] = set()
+        for output_root in output_roots:
+            try:
+                candidate = mirrored_thumbnail_path(output_root, relative)
+            except ValueError:
+                continue
+            identity = str(candidate).casefold()
+            if identity in checked:
+                continue
+            checked.add(identity)
+            if is_valid_image_file(candidate, (width, height)):
+                return candidate
+        return None
+
+    def cache_sd_scan_image(self, cache_path: Path, data: bytes) -> str:
+        """Persist a validated provider response as a reusable PNG cache file."""
+        if not is_valid_image_data(data):
+            raise ValueError("Cannot cache invalid or incomplete artwork data.")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        if not is_valid_image_file(cache_path):
+            with Image.open(io.BytesIO(data)) as source_image:
+                source_image.load()
+                converted = source_image.convert("RGBA")
+                temporary = cache_path.with_suffix(".tmp.png")
+                converted.save(temporary, format="PNG")
+                temporary.replace(cache_path)
+        return str(cache_path)
+
+    def ask_sd_download_retry_skip(self, system: str, art_name: str, error: Exception | str) -> str:
+        """Ask on the Tk main thread whether a failed image should be retried/skipped.
+
+        SD scanning runs in a worker thread, so this schedules the modal dialog on
+        the UI thread and waits for the explicit user choice. Closing the dialog
+        is treated as Skip to avoid leaving the scan worker blocked.
+        """
+        completed = threading.Event()
+        answer = {"choice": "skip"}
+        detail = str(error).strip() or "The provider returned invalid image data."
+        if len(detail) > 360:
+            detail = detail[:357] + "..."
+
+        def show_dialog():
+            dialog = None
+            try:
+                dialog = tk.Toplevel(self)
+                dialog.title("Artwork Download Failed")
+                dialog.configure(bg="#152235")
+                dialog.transient(self)
+                dialog.resizable(False, False)
+                dialog.columnconfigure(0, weight=1)
+                ttk.Label(
+                    dialog,
+                    text=f"Could not download artwork for {display_libretro_name(art_name)}\nSystem: {system}",
+                    style="Section.TLabel",
+                    wraplength=430,
+                ).grid(row=0, column=0, sticky="w", padx=18, pady=(18, 8))
+                ttk.Label(
+                    dialog,
+                    text=f"Error: {detail}\n\nWould you like to retry this image or skip it and continue scanning?",
+                    style="Muted.TLabel",
+                    wraplength=430,
+                ).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 16))
+                buttons = ttk.Frame(dialog, style="Panel.TFrame")
+                buttons.grid(row=2, column=0, sticky="e", padx=18, pady=(0, 18))
+
+                def finish(choice: str):
+                    answer["choice"] = choice
+                    try:
+                        if dialog is not None and dialog.winfo_exists():
+                            dialog.grab_release()
+                            dialog.destroy()
+                    except tk.TclError:
+                        pass
+                    completed.set()
+
+                dialog.protocol("WM_DELETE_WINDOW", lambda: finish("skip"))
+                ttk.Button(buttons, text="Skip Image", command=lambda: finish("skip")).pack(
+                    side="right", padx=(8, 0)
+                )
+                ttk.Button(
+                    buttons,
+                    text="Retry Download",
+                    style="Accent.TButton",
+                    command=lambda: finish("retry"),
+                ).pack(side="right")
+                dialog.grab_set()
+                dialog.focus_force()
+            except tk.TclError:
+                try:
+                    if dialog is not None and dialog.winfo_exists():
+                        dialog.grab_release()
+                        dialog.destroy()
+                except tk.TclError:
+                    pass
+                answer["choice"] = "skip"
+                completed.set()
+
+        try:
+            self.after(0, show_dialog)
+        except tk.TclError:
+            return "skip"
+        completed.wait()
+        return answer["choice"]
+
     def _scan_sd_worker(
         self,
         root: Path,
@@ -1963,12 +2155,16 @@ class ThumbnailScraperApp(tk.Tk):
     ) -> dict:
         files = self.supported_files_on_sd(root, include_gba)
         folder = LIBRETRO_SOURCE_FOLDERS.get(source, "Named_Boxarts")
-        existing = {(item.new_code.casefold(), item.size) for item in self.custom_roms}
-        counts = {
-            size: sum(1 for item in self.custom_roms if item.size == size)
-            for size in size_names
-        }
-        matches: list[tuple[Path, str, str]] = []
+        existing_items: dict[tuple[str, str], tuple[int, CustomRomItem]] = {}
+        existing_items_by_relative: dict[str, list[tuple[int, CustomRomItem]]] = {}
+        for index, item in enumerate(self.custom_roms):
+            relative = self.custom_art_relative_path(item)
+            if relative:
+                relative_key = relative.casefold()
+                existing_items[(relative_key, item.size)] = (index, item)
+                existing_items_by_relative.setdefault(relative_key, []).append((index, item))
+
+        matches: list[tuple[Path, str, str, str]] = []
         unmatched: list[str] = []
         seen_targets: set[str] = set()
 
@@ -1985,51 +2181,188 @@ class ThumbnailScraperApp(tk.Tk):
             except ValueError:
                 unmatched.append(f"Unsupported filename: {path.name}")
                 continue
-            target_key = target_name.casefold()
+            try:
+                relative = relative_path_from_root(root, path, system)
+            except (OSError, ValueError):
+                unmatched.append(f"Could not make a ROM-relative path: {path.name}")
+                continue
+            target_key = relative.casefold()
             if target_key in seen_targets:
                 continue
             seen_targets.add(target_key)
             art_name = self.providers.find_libretro_art_name(target_name, system, folder)
             if art_name:
-                matches.append((path, system, art_name))
+                matches.append((path, system, art_name, relative))
             else:
                 unmatched.append(f"{system}: {path.name}")
 
-        downloaded: dict[tuple[str, str], bytes] = {}
-        download_errors: list[str] = []
-        unique_art = {(system, art_name) for _path, system, art_name in matches}
-        if unique_art:
-            self.after(0, lambda: self.status_var.set(f"Downloading {len(unique_art)} matched images..."))
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                future_to_art = {
-                    executor.submit(http_get, libretro_raw_url(system, folder, art_name)): (system, art_name)
-                    for system, art_name in unique_art
-                }
-                for future in as_completed(future_to_art):
-                    key = future_to_art[future]
-                    try:
-                        downloaded[key] = future.result()
-                    except Exception:
-                        download_errors.append(f"{key[0]}: {display_libretro_name(key[1])}")
+        # Resolve candidate directories once per size; thousands of ROMs should
+        # not trigger thousands of repeated directory listings.
+        output_roots_by_size = {
+            size: self.sd_thumbnail_output_roots(root, size)
+            for size in set(size_names)
+        }
 
-        additions: list[CustomRomItem] = []
-        skipped_limit: list[str] = []
+        # Determine which ROM/size pairs actually need work before downloading.
+        # Valid entries already in settings, installed SD folders, or previous
+        # generated IMGS/IMGS2 folders are not fetched or added again.
+        needed_sizes: dict[str, set[str]] = {}
+        updates: dict[int, str] = {}
         skipped_existing = 0
-        matched_files = 0
-        for path, system, art_name in matches:
-            data = downloaded.get((system, art_name))
-            if not data:
-                continue
-            matched_files += 1
-            result = ProviderResult("Libretro", art_name, data, system)
-            image_path = self.cache_provider_result(result, source)
+        for path, system, art_name, relative in matches:
+            target_key = relative.casefold()
+            missing: set[str] = set()
             for size in size_names:
-                key = (path.stem.casefold(), size)
-                if key in existing:
+                key = (target_key, size)
+                item_entry = existing_items.get(key)
+                if item_entry:
+                    item_index, item = item_entry
+                    if item.image_path and is_valid_image_file(item.image_path):
+                        skipped_existing += 1
+                        continue
+                output_path = self.existing_sd_thumbnail(
+                    root, relative, size, output_roots_by_size[size]
+                )
+                if output_path is not None:
+                    if item_entry:
+                        updates[item_entry[0]] = str(output_path)
                     skipped_existing += 1
                     continue
-                if counts.get(size, 0) >= 256:
-                    skipped_limit.append(f"{size}: {path.name}")
+                missing.add(size)
+            if missing:
+                needed_sizes[target_key] = missing
+
+        # Keep the per-game size requirements attached to the matched ROM path.
+        needed_art: set[tuple[str, str]] = set()
+        for _path, system, art_name, relative in matches:
+            if needed_sizes.get(relative.casefold()):
+                needed_art.add((system, art_name))
+
+        downloaded: dict[tuple[str, str], bytes] = {}
+        cache_paths: dict[tuple[str, str], Path] = {}
+        download_errors: list[str] = []
+        cache_hits = 0
+        # Previous scraper versions cached matched artwork by content hash and
+        # referenced that path from CustomRomItem settings. Reuse those local
+        # images when a scan now needs another thumbnail size for the same ROM.
+        prior_item_cache_by_art: dict[tuple[str, str], Path] = {}
+        for path, system, art_name, relative in matches:
+            if not needed_sizes.get(relative.casefold()):
+                continue
+            for _index, item in existing_items_by_relative.get(relative.casefold(), []):
+                if item.image_path and is_valid_image_file(item.image_path):
+                    prior_item_cache_by_art.setdefault((system, art_name), Path(item.image_path))
+                    break
+        if needed_art:
+            self.after(0, lambda: self.status_var.set(f"Checking cached artwork for {len(needed_art)} matches..."))
+            for key in sorted(needed_art):
+                system, art_name = key
+                cache_path = self.sd_scan_cache_path(folder, system, art_name)
+                cache_paths[key] = cache_path
+                if is_valid_image_file(cache_path):
+                    try:
+                        cached_data = cache_path.read_bytes()
+                    except OSError:
+                        cached_data = b""
+                    if is_valid_image_data(cached_data):
+                        downloaded[key] = cached_data
+                        cache_hits += 1
+                        continue
+                    try:
+                        cache_path.unlink()
+                    except OSError:
+                        pass
+
+                # Migrate/reuse the content-addressed cache from v1.6.1 when a
+                # previous custom entry already has a usable source image.
+                legacy_path = prior_item_cache_by_art.get(key)
+                if legacy_path and is_valid_image_file(legacy_path):
+                    try:
+                        legacy_data = legacy_path.read_bytes()
+                        if is_valid_image_data(legacy_data):
+                            self.cache_sd_scan_image(cache_path, legacy_data)
+                            downloaded[key] = cache_path.read_bytes()
+                            cache_hits += 1
+                            continue
+                    except (OSError, ValueError, SyntaxError):
+                        pass
+                if cache_path.exists() and not is_valid_image_file(cache_path):
+                    try:
+                        cache_path.unlink()
+                    except OSError:
+                        pass
+
+            to_download = needed_art - set(downloaded)
+            if to_download:
+                self.after(0, lambda count=len(to_download): self.status_var.set(f"Downloading {count} uncached images..."))
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    future_to_art = {
+                        executor.submit(http_get, libretro_raw_url(system, folder, art_name)): (system, art_name)
+                        for system, art_name in sorted(to_download)
+                    }
+                    for future in as_completed(future_to_art):
+                        key = future_to_art[future]
+                        system, art_name = key
+                        url = libretro_raw_url(system, folder, art_name)
+                        first_attempt = True
+                        while True:
+                            try:
+                                if first_attempt:
+                                    first_attempt = False
+                                    data = future.result()
+                                else:
+                                    data = http_get(url)
+                                if not is_valid_image_data(data):
+                                    raise ValueError("Provider returned invalid or incomplete image data")
+                            except Exception as exc:
+                                action = self.ask_sd_download_retry_skip(system, art_name, exc)
+                                if action == "retry":
+                                    # The original future has already completed, so
+                                    # retry this one URL directly while the rest of
+                                    # the library's downloads continue in the pool.
+                                    continue
+                                download_errors.append(
+                                    f"{system}: {display_libretro_name(art_name)} (skipped after download error: {exc})"
+                                )
+                                break
+                            downloaded[key] = data
+                            try:
+                                cache_path = cache_paths[key]
+                                self.cache_sd_scan_image(cache_path, data)
+                                # Use the normalized persistent PNG bytes on future runs.
+                                downloaded[key] = cache_path.read_bytes()
+                            except Exception as exc:
+                                # A valid response can still fail to persist (for
+                                # example, a full disk). Keep the image for this
+                                # scan and report the cache problem without aborting.
+                                download_errors.append(
+                                    f"{system}: {display_libretro_name(art_name)} (cache write failed: {exc})"
+                                )
+                            break
+
+        additions: list[CustomRomItem] = []
+        matched_files = len(matches)
+        for path, system, art_name, relative in matches:
+            relative_key = relative.casefold()
+            if not needed_sizes.get(relative_key):
+                continue
+            key_art = (system, art_name)
+            data = downloaded.get(key_art)
+            if not data:
+                continue
+            image_path = str(cache_paths.get(key_art) or self.sd_scan_cache_path(folder, system, art_name))
+            # Cache paths are persistent and deterministic. If writing that cache
+            # failed, make a best effort to keep a temporary matched-art cache.
+            if not is_valid_image_file(image_path):
+                try:
+                    image_path = self.cache_provider_result(ProviderResult("Libretro", art_name, data, system), folder)
+                except Exception:
+                    continue
+            for size in needed_sizes[relative_key]:
+                key = (relative_key, size)
+                existing_item = existing_items.get(key)
+                if existing_item:
+                    updates[existing_item[0]] = image_path
                     continue
                 additions.append(
                     CustomRomItem(
@@ -2040,23 +2373,26 @@ class ThumbnailScraperApp(tk.Tk):
                         image_path=image_path,
                         size=size,
                         system=system,
+                        rom_relative_path=relative,
                     )
                 )
-                existing.add(key)
-                counts[size] = counts.get(size, 0) + 1
 
         return {
             "files": len(files),
             "matched_files": matched_files,
             "additions": additions,
+            "updates": updates,
             "unmatched": unmatched,
             "download_errors": download_errors,
-            "skipped_limit": skipped_limit,
             "skipped_existing": skipped_existing,
+            "cache_hits": cache_hits,
         }
 
     def finish_sd_scan(self, result: dict):
         additions = result["additions"]
+        for index, image_path in result.get("updates", {}).items():
+            if 0 <= index < len(self.custom_roms):
+                self.custom_roms[index].image_path = image_path
         self.custom_roms.extend(additions)
         self.refresh_custom_roms(
             list(range(len(self.custom_roms) - len(additions), len(self.custom_roms))) if additions else []
@@ -2090,7 +2426,9 @@ class ThumbnailScraperApp(tk.Tk):
             f"and added {len(result['additions'])} artwork entries."
         )
         if result["skipped_existing"]:
-            summary += f" {result['skipped_existing']} existing entries were kept."
+            summary += f" Skipped {result['skipped_existing']} thumbnails already present in settings, cache-linked entries, or IMGS/IMGS2 output."
+        if result.get("cache_hits"):
+            summary += f" Reused {result['cache_hits']} cached source images without downloading them again."
         ttk.Label(dialog, text=summary, style="Muted.TLabel", wraplength=570).grid(
             row=1, column=0, sticky="w", padx=18, pady=(0, 10)
         )
@@ -2099,8 +2437,6 @@ class ThumbnailScraperApp(tk.Tk):
             details.append("No Libretro match:\n" + "\n".join(result["unmatched"]))
         if result["download_errors"]:
             details.append("Could not download:\n" + "\n".join(result["download_errors"]))
-        if result["skipped_limit"]:
-            details.append("Not added because a CUSTOM folder reached 256 images:\n" + "\n".join(result["skipped_limit"]))
         text_box = tk.Text(
             dialog,
             bg="#101a29",
@@ -2133,7 +2469,11 @@ class ThumbnailScraperApp(tk.Tk):
         added = 0
         selected_size = self.size_var.get()
         existing_paths = {(item.rom_path, item.size) for item in self.custom_roms if item.rom_path}
-        existing_names = {(item.new_code.casefold(), item.size) for item in self.custom_roms}
+        existing_names = set()
+        for item in self.custom_roms:
+            relative = self.custom_art_relative_path(item)
+            identity = ("path:" + relative.casefold()) if relative else ("custom:" + item.new_code.casefold())
+            existing_names.add((identity, item.size))
         for raw_path in paths:
             path = Path(raw_path)
             if (str(path), selected_size) in existing_paths:
@@ -2147,7 +2487,10 @@ class ThumbnailScraperApp(tk.Tk):
             except ValueError as exc:
                 messagebox.showwarning(APP_NAME, f"{path.name}: {exc}")
                 continue
-            if (thumb_name.casefold(), selected_size) in existing_names:
+            system = system_for_path(path) or ""
+            relative = infer_relative_rom_path(path, system) if system else ""
+            identity = ("path:" + relative.casefold()) if relative else ("custom:" + thumb_name.casefold())
+            if (identity, selected_size) in existing_names:
                 continue
             self.custom_roms.append(
                 CustomRomItem(
@@ -2156,11 +2499,12 @@ class ThumbnailScraperApp(tk.Tk):
                     code or "----",
                     thumb_name,
                     size=selected_size,
-                    system=system_for_path(path) or "",
+                    system=system,
+                    rom_relative_path=relative,
                 )
             )
             existing_paths.add((str(path), selected_size))
-            existing_names.add((thumb_name.casefold(), selected_size))
+            existing_names.add((identity, selected_size))
             added += 1
         if added:
             self.refresh_custom_roms()
@@ -2188,8 +2532,12 @@ class ThumbnailScraperApp(tk.Tk):
                 messagebox.showwarning(APP_NAME, str(exc), parent=dialog)
                 return
             selected_size = self.size_var.get()
-            if (name.casefold(), selected_size) in {(item.new_code.casefold(), item.size) for item in self.custom_roms}:
-                messagebox.showinfo(APP_NAME, "That custom name and size is already in the list.", parent=dialog)
+            if (name.casefold(), selected_size) in {
+                (item.new_code.casefold(), item.size)
+                for item in self.custom_roms
+                if not self.custom_art_relative_path(item)
+            }:
+                messagebox.showinfo(APP_NAME, "That CUSTOM name and size is already in the list.", parent=dialog)
                 return
             self.custom_roms.append(CustomRomItem("", name, "----", name, size=selected_size))
             self.refresh_custom_roms([len(self.custom_roms) - 1])
@@ -2303,6 +2651,10 @@ class ThumbnailScraperApp(tk.Tk):
         next_index = min(indices) if self.custom_roms else -1
         self.refresh_custom_roms([min(next_index, len(self.custom_roms) - 1)] if next_index >= 0 else [])
 
+    def on_custom_output_layout_changed(self):
+        self.update_custom_preview()
+        self.save_settings()
+
     def apply_custom_code(self):
         indices = self.selected_custom_indices()
         if len(indices) != 1:
@@ -2313,8 +2665,24 @@ class ThumbnailScraperApp(tk.Tk):
         except ValueError as exc:
             messagebox.showwarning(APP_NAME, str(exc))
             return
-        size = self.custom_roms[indices[0]].size
-        used = {(item.new_code.casefold(), item.size) for index, item in enumerate(self.custom_roms) if index != indices[0]}
+        item = self.custom_roms[indices[0]]
+        if self.custom_output_layout_var.get() == "Mirror ROM folders" and self.custom_art_relative_path(item):
+            messagebox.showinfo(
+                APP_NAME,
+                "Mirrored artwork always uses the ROM's actual filename and relative folder. "
+                "Rename the ROM on the SD card and scan it again to change that path; the editable name applies to CUSTOM artwork.",
+            )
+            return
+        size = item.size
+        used = {
+            (other.new_code.casefold(), other.size)
+            for index, other in enumerate(self.custom_roms)
+            if index != indices[0]
+            and (
+                self.custom_output_layout_var.get() == "Legacy CUSTOM"
+                or not self.custom_art_relative_path(other)
+            )
+        }
         if (code.casefold(), size) in used:
             messagebox.showwarning(APP_NAME, "That name and size is already used by another custom entry.")
             return
@@ -2345,8 +2713,14 @@ class ThumbnailScraperApp(tk.Tk):
             self.custom_preview_photo = ImageTk.PhotoImage(preview)
             self.custom_preview_label.configure(image=self.custom_preview_photo, width=w * 3, height=h * 3)
             folder_name = self.size_details(item.size)[2]
-            self.custom_preview_info.configure(text=f"{folder_name}/CUSTOM/{item.new_code}.bmp ({item.size})")
-        except OSError as exc:
+            layout = self.custom_output_layout_var.get()
+            relative = self.custom_art_relative_path(item)
+            if layout == "Mirror ROM folders" and relative:
+                mirrored = mirrored_thumbnail_path(Path(folder_name), relative)
+                self.custom_preview_info.configure(text=f"{mirrored.as_posix()} ({item.size})")
+            else:
+                self.custom_preview_info.configure(text=f"{folder_name}/CUSTOM/{item.new_code}.bmp ({item.size})")
+        except (OSError, ValueError) as exc:
             self.custom_preview_info.configure(text=f"Could not preview image: {exc}")
 
     def build_custom_rom_output(self):
@@ -2357,29 +2731,69 @@ class ThumbnailScraperApp(tk.Tk):
         if missing:
             messagebox.showwarning(APP_NAME, "Set images for every custom entry first.")
             return
-        counts = {
-            size: len({item.new_code.casefold() for item in self.custom_roms if item.size == size})
-            for size in ("80x80", "120x80")
-        }
-        over_limit = [size for size, count in counts.items() if count > 256]
-        if over_limit:
-            labels = ", ".join(over_limit)
-            messagebox.showwarning(
-                APP_NAME,
-                f"The {labels} CUSTOM output exceeds the 256-image limit. Remove some entries before building.",
-            )
-            return
+
+        layout = self.custom_output_layout_var.get()
+        mirror_entries: dict[int, str] = {}
+        custom_entries: dict[str, set[str]] = {"80x80": set(), "120x80": set()}
+        destinations: dict[tuple[str, str], str] = {}
         try:
+            # Decide destinations before writing anything. This catches collisions
+            # in legacy CUSTOM mode, where folder paths are deliberately flattened.
+            for index, item in enumerate(self.custom_roms):
+                relative = self.custom_art_relative_path(item) if layout == "Mirror ROM folders" else ""
+                if relative:
+                    mirror_entries[index] = relative
+                else:
+                    if not self.is_extension_default_name(item.new_code):
+                        custom_entries[item.size].add(item.new_code.casefold())
+
+            over_limit = [size for size, names in custom_entries.items() if len(names) > 256]
+            if over_limit:
+                labels = ", ".join(over_limit)
+                messagebox.showwarning(
+                    APP_NAME,
+                    f"The following legacy CUSTOM output(s) exceed the 256 indexed-image limit: {labels}.\n\n"
+                    "Use Mirror ROM folders for ROM-matched artwork, or reduce name-only CUSTOM artwork to 256 images per size. "
+                    "Extension defaults such as gb.bmp and nes.bmp are loaded directly and do not consume an index entry.",
+                )
+                return
+
+            for index, item in enumerate(self.custom_roms):
+                _w, _h, folder_name = self.size_details(item.size)
+                if index in mirror_entries:
+                    output_path = mirrored_thumbnail_path(Path(folder_name), mirror_entries[index])
+                else:
+                    output_path = output_path_for_custom_name(Path(folder_name), item.new_code)
+                identity = (item.size, str(output_path).casefold())
+                if identity in destinations:
+                    messagebox.showwarning(
+                        APP_NAME,
+                        "Two entries would write to the same artwork filename:\n\n"
+                        f"{destinations[identity]}\n{item.new_code}\n\n"
+                        "Use mirrored folders or remove/rename the duplicate entry before building.",
+                    )
+                    return
+                destinations[identity] = item.new_code
+
             run_dir = self.output_run_dir()
-            for item in self.custom_roms:
+            made_mirrored = 0
+            made_custom = 0
+            for index, item in enumerate(self.custom_roms):
                 thumb_name = validate_custom_art_name(item.new_code)
-                image = Image.open(item.image_path)
-                w, h, folder_name = self.size_details(item.size)
-                imgs_dir = run_dir / folder_name
-                thumb = crop_image(image, (w, h), self.crop_from_dict(item.crop))
-                write_ezflash_bmp(thumb, output_path_for_custom_name(imgs_dir, thumb_name))
+                with Image.open(item.image_path) as source_image:
+                    w, h, folder_name = self.size_details(item.size)
+                    imgs_dir = run_dir / folder_name
+                    thumb = crop_image(source_image, (w, h), self.crop_from_dict(item.crop))
+                    if index in mirror_entries:
+                        target = mirrored_thumbnail_path(imgs_dir, mirror_entries[index])
+                        made_mirrored += 1
+                    else:
+                        target = output_path_for_custom_name(imgs_dir, thumb_name)
+                        made_custom += 1
+                    write_ezflash_bmp(thumb, target)
             self.status_var.set(f"Custom art output created: {run_dir}")
-            messagebox.showinfo(APP_NAME, f"Custom art output created:\n{run_dir}")
+            extra = f"\nMirrored files: {made_mirrored}; CUSTOM files: {made_custom}." if layout == "Mirror ROM folders" else "\nOutput layout: legacy CUSTOM."
+            messagebox.showinfo(APP_NAME, f"Custom art output created:\n{run_dir}{extra}")
         except Exception as exc:
             messagebox.showwarning(APP_NAME, str(exc))
 
@@ -2667,6 +3081,8 @@ class ThumbnailScraperApp(tk.Tk):
                     var.set(data.get(name, ""))
             if data.get("build_provider") in PROVIDER_VALUES:
                 self.build_provider_var.set(data["build_provider"])
+            if data.get("custom_output_layout") in {"Mirror ROM folders", "Legacy CUSTOM"}:
+                self.custom_output_layout_var.set(data["custom_output_layout"])
             if data.get("preview_provider") in PROVIDER_VALUES:
                 self.preview_provider_var.set(data["preview_provider"])
             if data.get("preview_system") in LIBRETRO_SYSTEMS:
@@ -2702,6 +3118,7 @@ class ThumbnailScraperApp(tk.Tk):
             custom_loaded = []
             for item in data.get("custom_art", data.get("custom_roms", [])):
                 item.setdefault("rom_path", "")
+                item.setdefault("rom_relative_path", "")
                 item.setdefault("title", item.get("new_code", ""))
                 item.setdefault("old_code", "----")
                 item.setdefault("new_code", item.get("title", ""))
@@ -2739,6 +3156,7 @@ class ThumbnailScraperApp(tk.Tk):
             "ss_pass": self.ss_pass_var.get(),
             "exceptions": [asdict(item) for item in self.exceptions],
             "custom_art": [asdict(item) for item in self.custom_roms],
+            "custom_output_layout": self.custom_output_layout_var.get(),
         }
         self.config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         self.status_var.set("Saved.")
