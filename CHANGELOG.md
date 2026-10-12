@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.10.3 - Automatic fallback toggle for SD scans
+
+- Added an SD-scan setup option to automatically try configured fallback providers when a Libretro artwork download fails, without prompting for each affected title.
+- Added the same opt-in control to the first “Artwork Image Unavailable” prompt; enabling it applies to all later titles in that scan while preserving the user's choice to fallback or skip the current image.
+- The existing optional ROM hash-matching toggle remains alongside the new automatic-fallback option. When enabled, hash matching remains the final recovery attempt after name-based fallback fails.
+- Added offline regression tests for pre-enabled automatic fallback and enabling it from the first per-image prompt.
+
+
 ## v1.10.2 - Retail release artwork priority
 
 - Rank the standard retail release ahead of alpha, beta, prototype, demo, test/debug, unreleased, hack, mod, fan-translation, randomizer, bootleg and other non-retail variants when several candidates match a title.

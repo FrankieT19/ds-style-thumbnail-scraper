@@ -1,4 +1,4 @@
-DS STYLE THUMBNAIL SCRAPER v1.10.1
+DS STYLE THUMBNAIL SCRAPER v1.10.3
 
 For DS Style v7.4 or newer.
 
@@ -15,9 +15,14 @@ The Custom Art SD scan now opens a live progress window with the current phase, 
 
 Build complete Game Boy Advance packs from Libretro or a local artwork pack. For other supported systems, choose the console when searching or use Scan SD Card on the Custom Art tab to find artwork only for games already on your card.
 
-When a provider returns invalid image data during an SD scan, the scraper offers Try Fallback or Skip Image. Successful source images are cached persistently, and repeat scans skip valid thumbnails already in cache, on the SD card under SYSTEM/IMGS or SYSTEM/IMGS2, or in prior scraper output folders. Corrupt or wrong-sized output thumbnails are regenerated.
+When a provider returns invalid image data during an SD scan, the scraper offers Try Fallback or Skip Image. Enable automatic fallback in the SD-scan setup or on the first prompt to try configured fallback providers for later titles without repeated prompts. Optional ROM hash matching remains a separate, slower final fallback. Successful source images are cached persistently, and repeat scans skip valid thumbnails already in cache, on the SD card under SYSTEM/IMGS or SYSTEM/IMGS2, or in prior scraper output folders. Corrupt or wrong-sized output thumbnails are regenerated.
 
 By default, scanned ROM artwork mirrors each ROM's directory path under IMGS and IMGS2. The mirrored files do not use the flat CUSTOM index and are not limited to 256 images. "Legacy CUSTOM" remains available for older kernels/workflows and is limited to 256 ordinary indexed images per size. Extension defaults such as CUSTOM/gb.bmp are supported by kernels with the matching artwork changes.
+
+AUTOMATIC ARTWORK FALLBACK (v1.10.3)
+
+During Scan SD Card setup, enable "Automatically try fallback providers when artwork is unavailable" to continue through the configured fallback chain without asking about each failed Libretro image download. You can also enable the option in the first "Artwork Image Unavailable" prompt; this affects future titles in that scan, while Try Fallback or Skip Image still controls the current title. Hash matching remains a separate optional final fallback and must be enabled independently.
+
 
 OPTIONAL ROM HASH MATCHING (v1.10.0)
 

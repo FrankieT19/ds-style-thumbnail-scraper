@@ -43,7 +43,7 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Thumbnail Scraper"
-APP_VERSION = "1.10.2"
+APP_VERSION = "1.10.3"
 OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper output"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
 CONFIG_NAME = "thumbnail_scraper_settings.json"
@@ -3301,18 +3301,25 @@ class ThumbnailScraperApp(tk.Tk):
             text="Use ROM hash matching if name searches fail (slower; reads ROM contents)",
             variable=use_hash_matching_var,
         ).grid(row=5, column=0, columnspan=2, sticky="w", padx=18, pady=(8, 2))
+        auto_fallback_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            dialog,
+            text="Automatically try fallback providers when artwork is unavailable",
+            variable=auto_fallback_var,
+        ).grid(row=6, column=0, columnspan=2, sticky="w", padx=18, pady=(6, 2))
         ttk.Label(
             dialog,
             text=(
-                "Hash mode is optional and only runs after name-based searches fail. "
-                "It checks TheGamesDB and ScreenScraper; Libretro thumbnails and IGDB do not expose direct ROM-hash artwork lookup. "
-                "Mirrored output preserves the ROM paths under IMGS / IMGS2."
+                "Name searches use Libretro → TheGamesDB → ScreenScraper → IGDB. "
+                "Automatic fallback skips the per-image Try Fallback / Skip Image prompt after a download fails. "
+                "Hash mode, if enabled, is the final step and checks TheGamesDB and ScreenScraper. "
+                "Mirrored output preserves ROM paths under IMGS / IMGS2."
             ),
             style="Muted.TLabel",
             wraplength=480,
-        ).grid(row=6, column=0, columnspan=2, sticky="w", padx=18, pady=(0, 14))
+        ).grid(row=7, column=0, columnspan=2, sticky="w", padx=18, pady=(0, 14))
         buttons = ttk.Frame(dialog, style="Panel.TFrame")
-        buttons.grid(row=7, column=0, columnspan=2, sticky="e", padx=18, pady=(0, 18))
+        buttons.grid(row=8, column=0, columnspan=2, sticky="e", padx=18, pady=(0, 18))
 
         def begin():
             size_names = {
@@ -3324,6 +3331,7 @@ class ThumbnailScraperApp(tk.Tk):
             self.start_sd_scan(
                 root, source_var.get(), size_names, include_gba_var.get(),
                 use_hash_matching=use_hash_matching_var.get(),
+                auto_fallback=auto_fallback_var.get(),
             )
 
         ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side="right", padx=(8, 0))
@@ -3331,7 +3339,7 @@ class ThumbnailScraperApp(tk.Tk):
 
     def start_sd_scan(
         self, root: Path, source: str, size_names: list[str], include_gba: bool,
-        use_hash_matching: bool = False,
+        use_hash_matching: bool = False, auto_fallback: bool = False,
     ):
         if self.scan_running:
             return
@@ -3358,6 +3366,7 @@ class ThumbnailScraperApp(tk.Tk):
                     include_gba,
                     progress_callback=report_progress,
                     use_hash_matching=use_hash_matching,
+                    auto_fallback=auto_fallback,
                 )
                 self.after(0, lambda: self.finish_sd_scan(result))
             except Exception as exc:
@@ -3519,11 +3528,22 @@ class ThumbnailScraperApp(tk.Tk):
                     style="Muted.TLabel",
                     wraplength=430,
                 ).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 16))
+                auto_fallback_state = getattr(self, "_sd_auto_fallback_state", None)
+                auto_fallback_var = tk.BooleanVar(
+                    value=bool(auto_fallback_state and auto_fallback_state.get("enabled"))
+                )
+                ttk.Checkbutton(
+                    dialog,
+                    text="Automatically try fallback for all future titles in this scan",
+                    variable=auto_fallback_var,
+                ).grid(row=2, column=0, sticky="w", padx=18, pady=(0, 12))
                 buttons = ttk.Frame(dialog, style="Panel.TFrame")
-                buttons.grid(row=2, column=0, sticky="e", padx=18, pady=(0, 18))
+                buttons.grid(row=3, column=0, sticky="e", padx=18, pady=(0, 18))
 
                 def finish(choice: str):
                     answer["choice"] = choice
+                    if auto_fallback_state is not None:
+                        auto_fallback_state["enabled"] = bool(auto_fallback_var.get())
                     try:
                         if dialog is not None and dialog.winfo_exists():
                             dialog.grab_release()
@@ -3569,7 +3589,12 @@ class ThumbnailScraperApp(tk.Tk):
         include_gba: bool,
         progress_callback=None,
         use_hash_matching: bool = False,
+        auto_fallback: bool = False,
     ) -> dict:
+        # Shared with the main-thread fallback prompt so its checkbox can apply
+        # automatically to every later download failure in this scan.
+        self._sd_auto_fallback_state = {"enabled": bool(auto_fallback)}
+
         def report(heading, current=None, total=None, detail=""):
             if progress_callback:
                 progress_callback(heading, current, total, detail)
@@ -3938,7 +3963,11 @@ class ThumbnailScraperApp(tk.Tk):
                         if not is_valid_image_data(data):
                             raise ValueError("Provider returned invalid or incomplete image data")
                     except Exception as exc:
-                        action = self.ask_sd_download_fallback_skip(system, art_name, exc)
+                        auto_fallback_state = getattr(self, "_sd_auto_fallback_state", {})
+                        if auto_fallback_state.get("enabled"):
+                            action = "fallback"
+                        else:
+                            action = self.ask_sd_download_fallback_skip(system, art_name, exc)
                         if action == "fallback":
                             candidate = candidates_by_relative.get(matches_by_art[key].relative.casefold())
                             query = candidate.title if candidate else Path(art_name).stem

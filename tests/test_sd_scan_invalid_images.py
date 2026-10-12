@@ -39,7 +39,7 @@ def png_bytes(size=(120, 80)) -> bytes:
     return stream.getvalue()
 
 
-def make_app(base_dir: Path, choices=None):
+def make_app(base_dir: Path, choices=None, enable_auto_fallback_on_prompt=False):
     app = object.__new__(APP_MODULE.ThumbnailScraperApp)
     app.base_dir = base_dir
     app.custom_roms = []
@@ -51,6 +51,9 @@ def make_app(base_dir: Path, choices=None):
 
     def choose(system, art_name, error):
         prompt_calls.append((system, art_name, str(error)))
+        if enable_auto_fallback_on_prompt:
+            # Represents ticking the new per-scan checkbox in the first prompt.
+            app._sd_auto_fallback_state["enabled"] = True
         return choices.pop(0) if choices else "skip"
 
     app.ask_sd_download_fallback_skip = choose
@@ -128,6 +131,59 @@ class SdScanInvalidImageTests(unittest.TestCase):
                 "Retry Game", max_results=1, system="Game Boy", after_provider="Libretro",
                 prior_errors=["Libretro image download: Provider returned invalid or incomplete image data"],
             )
+
+    def test_scan_setup_auto_fallback_skips_prompts_for_future_download_failures(self):
+        calls = []
+
+        def fake_http_get(url):
+            calls.append(url)
+            return b"<html>temporary error</html>"
+
+        self.with_mock_downloads(fake_http_get)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "sd"
+            make_rom(root, "First Broken Game")
+            make_rom(root, "Second Broken Game")
+            app, prompts = make_app(Path(temp) / "app")
+            fallback_result = APP_MODULE.ProviderResult(
+                "TheGamesDB", "Retail artwork.png", png_bytes(), "Game Boy"
+            )
+            app.providers.search_fallback_many = Mock(return_value=[fallback_result])
+
+            result = app._scan_sd_worker(
+                root, "Box Art", ["80x80"], False, auto_fallback=True
+            )
+
+            self.assertEqual(len(prompts), 0)
+            self.assertEqual(app.providers.search_fallback_many.call_count, 2)
+            self.assertEqual(len(result["download_errors"]), 0)
+            self.assertEqual(len(result["additions"]), 2)
+
+    def test_first_prompt_checkbox_enables_auto_fallback_for_later_titles(self):
+        def fake_http_get(_url):
+            return b"<html>temporary error</html>"
+
+        self.with_mock_downloads(fake_http_get)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "sd"
+            make_rom(root, "First Broken Game")
+            make_rom(root, "Second Broken Game")
+            app, prompts = make_app(
+                Path(temp) / "app",
+                choices=["fallback"],
+                enable_auto_fallback_on_prompt=True,
+            )
+            fallback_result = APP_MODULE.ProviderResult(
+                "TheGamesDB", "Fallback artwork.png", png_bytes(), "Game Boy"
+            )
+            app.providers.search_fallback_many = Mock(return_value=[fallback_result])
+
+            result = app._scan_sd_worker(root, "Box Art", ["80x80"], False)
+
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(app.providers.search_fallback_many.call_count, 2)
+            self.assertEqual(len(result["download_errors"]), 0)
+            self.assertEqual(len(result["additions"]), 2)
 
     def test_second_scan_reuses_persistent_art_cache_without_network(self):
         calls = []
