@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import ctypes
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 import io
@@ -23,6 +24,12 @@ from PIL import Image, ImageTk
 
 from ezflash_gba_full_library import load_gba_library
 from ezflash_gba_pack_converter import build_art_index, find_best_art, iter_art_files
+from thumbnail_output_paths import infer_relative_rom_path, mirrored_thumbnail_path, relative_path_from_root
+from thumbnail_image_data import is_valid_image_data, is_valid_image_file
+from thumbnail_rendering import fit_image_to_canvas, should_fit_art
+from rom_matching import compute_rom_hashes, strip_nointro_tags
+from json_cache import write_json_atomic
+
 from ezflash_gba_thumbs import (
     app_dir,
     clean_title,
@@ -37,13 +44,17 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Thumbnail Scraper"
-APP_VERSION = "1.5"
-OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper output"
+APP_VERSION = "1.10.11"
+OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper Output"
+THUMBNAIL_PACKS_FOLDER_NAME = "Thumbnail Packs"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
 CONFIG_NAME = "thumbnail_scraper_settings.json"
 DEFAULT_SEARCH = "Mario Kart - Super Circuit"
 PREVIEW_RESULT_LIMIT = 64
 REGION_ORDER = ["USA", "Europe", "Japan", "Other"]
+CONTROL_PANEL_WIDTH = 270
+BUTTON_FONT = ("Segoe UI", 10)
+BUTTON_PADDING = (8, 5)
 SEARCH_IGNORED_TITLE_TOKENS = {
     "the",
     "of",
@@ -61,7 +72,8 @@ BUILD_PREVIEW_SAMPLES = {
 }
 GBA_IGDB_PLATFORM_ID = 24
 GBA_SCREENSCRAPER_SYSTEM_ID = 12
-PROVIDER_VALUES = ["Libretro", "Local Pack"]
+PROVIDER_VALUES = ["Libretro", "Local Pack", "TheGamesDB", "ScreenScraper", "IGDB"]
+AUTOMATIC_PROVIDER_ORDER = ("Libretro", "TheGamesDB", "ScreenScraper", "IGDB")
 DEFAULT_SYSTEM = "Game Boy Advance"
 LIBRETRO_SYSTEMS = {
     "Game Boy Advance": {
@@ -113,6 +125,242 @@ LIBRETRO_SOURCE_FOLDERS = {
     "Gameplay Screenshot": "Named_Snaps",
     "Title Screen": "Named_Titles",
 }
+THEGAMESDB_BASE_URL = "https://api.thegamesdb.net"
+THEGAMESDB_PLATFORM_ALIASES = {
+    "Game Boy Advance": ("Nintendo Game Boy Advance", "Game Boy Advance"),
+    "Game Boy": ("Nintendo Game Boy", "Game Boy"),
+    "Game Boy Color": ("Nintendo Game Boy Color", "Game Boy Color"),
+    "Nintendo Entertainment System": ("Nintendo Entertainment System (NES)", "Nintendo Entertainment System", "NES"),
+    "Master System": ("Sega Master System", "Master System"),
+    "Game Gear": ("Sega Game Gear", "Game Gear"),
+    "SG-1000": ("SEGA SG-1000", "SG-1000"),
+    "PC Engine": ("TurboGrafx 16", "TurboGrafx-16", "NEC PC Engine", "PC Engine"),
+    "Neo Geo Pocket": ("Neo Geo Pocket",),
+    "Neo Geo Pocket Color": ("Neo Geo Pocket Color",),
+    "WonderSwan": ("WonderSwan",),
+    "WonderSwan Color": ("WonderSwan Color",),
+    "MSX": ("MSX",),
+    "Watara Supervision": ("Watara Supervision",),
+    "ZX Spectrum": ("Sinclair ZX Spectrum", "ZX Spectrum"),
+    "ColecoVision": ("Colecovision", "ColecoVision"),
+    "Arcadia 2001": ("Emerson Arcadia 2001", "Arcadia 2001"),
+    "Super Cassette Vision": ("Epoch Super Cassette Vision", "Super Cassette Vision"),
+}
+SCREENSCRAPER_SYSTEM_ALIASES = {
+    "Game Boy Advance": ("Game Boy Advance", "Nintendo Game Boy Advance", "GBA"),
+    "Game Boy": ("Game Boy", "Nintendo Game Boy", "GB"),
+    "Game Boy Color": ("Game Boy Color", "Nintendo Game Boy Color", "GBC"),
+    "Nintendo Entertainment System": ("Nintendo Entertainment System", "Nintendo Entertainment System (NES)", "NES", "Famicom"),
+    "Master System": ("Master System", "Sega Master System", "Mark III"),
+    "Game Gear": ("Game Gear", "Sega Game Gear"),
+    "SG-1000": ("SG-1000", "Sega SG-1000", "SEGA SG-1000"),
+    "PC Engine": ("PC Engine", "NEC PC Engine", "TurboGrafx-16", "TurboGrafx 16"),
+    "Neo Geo Pocket": ("Neo Geo Pocket", "SNK Neo Geo Pocket"),
+    "Neo Geo Pocket Color": ("Neo Geo Pocket Color", "SNK Neo Geo Pocket Color"),
+    "WonderSwan": ("WonderSwan", "Bandai WonderSwan"),
+    "WonderSwan Color": ("WonderSwan Color", "Bandai WonderSwan Color"),
+    "MSX": ("MSX", "MSX 1", "Microsoft MSX"),
+    "Watara Supervision": ("Watara Supervision", "Supervision"),
+    "ZX Spectrum": ("ZX Spectrum", "Sinclair ZX Spectrum"),
+    "ColecoVision": ("ColecoVision", "Colecovision"),
+    "Arcadia 2001": ("Arcadia 2001", "Emerson Arcadia 2001"),
+    "Super Cassette Vision": ("Super Cassette Vision", "Epoch Super Cassette Vision"),
+}
+IGDB_PLATFORM_ALIASES = {
+    "Game Boy Advance": ("Game Boy Advance", "Nintendo Game Boy Advance"),
+    "Game Boy": ("Game Boy", "Nintendo Game Boy"),
+    "Game Boy Color": ("Game Boy Color", "Nintendo Game Boy Color"),
+    "Nintendo Entertainment System": ("Nintendo Entertainment System", "Nintendo Entertainment System (NES)", "Famicom"),
+    "Master System": ("Master System", "Sega Master System"),
+    "Game Gear": ("Game Gear", "Sega Game Gear"),
+    "SG-1000": ("SG-1000", "Sega SG-1000"),
+    "PC Engine": ("PC Engine", "TurboGrafx-16", "TurboGrafx-16/PC Engine"),
+    "Neo Geo Pocket": ("Neo Geo Pocket",),
+    "Neo Geo Pocket Color": ("Neo Geo Pocket Color",),
+    "WonderSwan": ("WonderSwan",),
+    "WonderSwan Color": ("WonderSwan Color",),
+    "MSX": ("MSX", "MSX 1"),
+    "Watara Supervision": ("Watara Supervision", "Supervision"),
+    "ZX Spectrum": ("ZX Spectrum", "Sinclair ZX Spectrum"),
+    "ColecoVision": ("ColecoVision", "Colecovision"),
+    "Arcadia 2001": ("Arcadia 2001",),
+    "Super Cassette Vision": ("Super Cassette Vision",),
+}
+# Extra folder names that local media collections (LaunchBox, ES-DE, Batocera,
+# RetroPie, OnionOS, MiSTer, libretro-thumbnails and hand-sorted libraries) use to
+# label a console. They are added to the system name, Libretro repo name and
+# provider aliases above. Matching ignores case, spaces, hyphens and underscores,
+# so "Game Boy", "GameBoy" and "game-boy" are one entry, and "TG16" also covers
+# "TG-16". The text inside () or [] is kept when matching a full folder name.
+LOCAL_PACK_DIRECTORY_ALIASES = {
+    "Game Boy Advance": ("Nintendo GBA",),
+    "Game Boy": (
+        "Original Game Boy",
+        "Nintendo Original Game Boy",
+        "Game Boy Original",
+        "Game Boy Classic",
+        "Game Boy DMG",
+        "Nintendo Game Boy DMG",
+        "DMG",
+    ),
+    "Game Boy Color": (
+        "Game Boy Colour",
+        "Nintendo Game Boy Colour",
+        "Game Boy Color GBC",
+        "Game Boy Color CGB",
+        "Nintendo GBC",
+        "GB Color",
+        "GB Colour",
+        "CGB",
+    ),
+    "Nintendo Entertainment System": (
+        "Original Nintendo",
+        "Original Nintendo Entertainment System",
+        "Nintendo NES",
+        "Nintendo 8-bit",
+        "8-bit Nintendo",
+        "Family Computer",
+        "Nintendo Family Computer",
+        "Nintendo Famicom",
+        "NES Famicom",
+        "Famicom NES",
+        "Nintendo NES Famicom",
+        "FC",
+    ),
+    "Master System": (
+        "Master System Mark III",
+        "Master System Mark 3",
+        "Sega Master System Mark 3",
+        "Sega Mark III",
+        "Sega Mark 3",
+        "Mark 3",
+        "SMS",
+        "Sega SMS",
+    ),
+    "Game Gear": ("Sega GG", "GG", "Game Gear GG", "Sega Game Gear GG"),
+    "PC Engine": (
+        "PC Engine TurboGrafx-16",
+        "TurboGrafx-16 PC Engine",
+        "TurboGrafx-16 and PC Engine",
+        "PC Engine and TurboGrafx-16",
+        "NEC TurboGrafx-16",
+        "NEC TurboGrafx",
+        "TurboGrafx",
+        "TG16",
+        "TGFX16",
+        "PCE",
+        "NEC PCE",
+    ),
+    "Neo Geo Pocket": ("NGP", "SNK NGP", "Neo Geo Pocket NGP"),
+    "Neo Geo Pocket Color": (
+        "Neo Geo Pocket Colour",
+        "SNK Neo Geo Pocket Colour",
+        "Neo Geo Pocket Color NGPC",
+        "SNK NGPC",
+        "NGPC",
+        "NGP Color",
+        "NGP Colour",
+    ),
+}
+# A bare brand name is only trusted when no console-specific folder appears
+# anywhere in the same path. "Nintendo/Game Boy/..." therefore resolves to Game Boy
+# and "GBA/Box Art/Nintendo/..." (a publisher folder) stays Game Boy Advance, while
+# "Nintendo/Box Art/..." is treated as NES.
+LOCAL_PACK_BROAD_DIRECTORY_ALIASES = {
+    "Nintendo Entertainment System": ("Nintendo",),
+}
+# Consoles this scraper cannot scrape but whose folders commonly sit beside the
+# supported ones and share game titles (Addams Family exists on NES, Game Boy, SNES,
+# Genesis, Game Gear and more). Art inside these folders is never offered for a
+# supported system when that system has no folder of its own.
+LOCAL_PACK_OTHER_CONSOLE_FOLDERS = (
+    "SNES", "Super NES", "Super Nintendo", "Super Nintendo Entertainment System",
+    "Nintendo Super Nintendo Entertainment System", "Super Famicom",
+    "Nintendo Super Famicom", "SFC",
+    "Nintendo 64", "N64", "GameCube", "Nintendo GameCube", "Wii", "Nintendo Wii",
+    "Nintendo DS", "NDS", "Nintendo DSi", "Nintendo 3DS", "3DS",
+    "Virtual Boy", "Nintendo Virtual Boy", "Pokemon Mini",
+    "Famicom Disk System", "Nintendo Famicom Disk System", "FDS",
+    "Genesis", "Sega Genesis", "Mega Drive", "Sega Mega Drive", "Genesis Mega Drive",
+    "Sega Genesis Mega Drive", "Mega Drive Genesis", "Sega Mega Drive Genesis",
+    "Sega CD", "Mega CD", "Sega Mega CD", "Sega 32X", "32X", "Sega Saturn", "Saturn",
+    "Sega Dreamcast", "Dreamcast",
+    "PC Engine CD", "TurboGrafx CD", "TurboGrafx-16 CD", "SuperGrafx", "PC Engine SuperGrafx",
+    "Neo Geo", "SNK Neo Geo", "Neo Geo AES", "Neo Geo MVS", "Neo Geo CD",
+    "Atari 2600", "Atari 5200", "Atari 7800", "Atari Lynx", "Lynx", "Atari Jaguar", "Jaguar",
+    "PlayStation", "Sony PlayStation", "PS1", "PSX", "PlayStation 2", "PS2", "PSP",
+    "PlayStation Portable",
+    "3DO", "Intellivision", "Mattel Intellivision", "Arcade", "MAME", "FBNeo",
+)
+# .ngc is listed under "Neo Geo Pocket" in LIBRETRO_SYSTEMS but is the usual
+# Neo Geo Pocket Color extension, so either console's folder may serve both.
+LOCAL_PACK_COMPATIBLE_SYSTEMS = {
+    "Neo Geo Pocket": ("Neo Geo Pocket Color",),
+    "Neo Geo Pocket Color": ("Neo Geo Pocket",),
+}
+LOCAL_PACK_OTHER_CONSOLE = "<other console>"
+
+
+def _squash_folder_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.casefold().replace("&", "and"))
+
+
+def local_pack_folder_keys(folder_name: str) -> tuple[str, ...]:
+    """Lookup keys for one folder name: the full name, then without () and [] text.
+
+    The full name is tried first so "Game Boy (Color)" means Game Boy Color, while
+    "NES (USA)" still falls back to "NES".
+    """
+    full = _squash_folder_name(folder_name)
+    bare = _squash_folder_name(re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", folder_name))
+    return tuple(dict.fromkeys(key for key in (full, bare) if key))
+
+
+def _build_local_pack_folder_owners() -> tuple[dict[str, frozenset[str]], dict[str, frozenset[str]]]:
+    specific: dict[str, set[str]] = {}
+    broad: dict[str, set[str]] = {}
+
+    def add(table: dict[str, set[str]], name: str, owner: str) -> None:
+        key = _squash_folder_name(name)
+        if key:
+            table.setdefault(key, set()).add(owner)
+
+    for system, details in LIBRETRO_SYSTEMS.items():
+        add(specific, system, system)
+        add(specific, details.get("repo", ""), system)
+        for mapping in (
+            THEGAMESDB_PLATFORM_ALIASES,
+            SCREENSCRAPER_SYSTEM_ALIASES,
+            IGDB_PLATFORM_ALIASES,
+            LOCAL_PACK_DIRECTORY_ALIASES,
+        ):
+            for alias in mapping.get(system, ()):
+                add(specific, alias, system)
+        for alias in LOCAL_PACK_BROAD_DIRECTORY_ALIASES.get(system, ()):
+            add(broad, alias, system)
+    for name in LOCAL_PACK_OTHER_CONSOLE_FOLDERS:
+        add(specific, name, LOCAL_PACK_OTHER_CONSOLE)
+    return (
+        {key: frozenset(owners) for key, owners in specific.items()},
+        {key: frozenset(owners) for key, owners in broad.items()},
+    )
+
+
+LOCAL_PACK_FOLDER_OWNERS, LOCAL_PACK_BROAD_FOLDER_OWNERS = _build_local_pack_folder_owners()
+
+
+def local_pack_folder_owners(folder_name: str) -> tuple[frozenset[str], frozenset[str]]:
+    """Return (console-specific owners, broad-brand owners) for a folder name."""
+    for key in local_pack_folder_keys(folder_name):
+        owners = LOCAL_PACK_FOLDER_OWNERS.get(key)
+        if owners:
+            return owners, frozenset()
+        owners = LOCAL_PACK_BROAD_FOLDER_OWNERS.get(key)
+        if owners:
+            return frozenset(), owners
+    return frozenset(), frozenset()
+
+
 GBA_SOURCE_CACHE_FILES = {
     "Named_Boxarts": "libretro_gba_boxarts.json",
     "Named_Snaps": "libretro_gba_snaps.json",
@@ -164,6 +412,46 @@ def request_json(url: str, headers: dict[str, str] | None = None) -> dict:
         raise
 
 
+def redact_provider_credentials(message: str) -> str:
+    """Remove credential query values before provider errors reach scan reports."""
+    return re.sub(
+        r"(?i)((?:apikey|devpassword|devid|ssid|sspassword|password)=)[^&\s]+",
+        r"\1[redacted]",
+        str(message),
+    )
+
+
+def format_hash_lookup_error_lines(unmatched_games: list[dict], detail_limit: int = 5) -> list[str]:
+    """Summarize failed hash lookups by provider, listing small groups by ROM."""
+    failures_by_provider: dict[str, list[tuple[str, str]]] = {}
+    for game in unmatched_games:
+        title = str(game.get("title") or "Unknown ROM")
+        for failure in game.get("hash_errors", []):
+            if not isinstance(failure, dict):
+                continue
+            provider = str(failure.get("provider") or "Unknown provider")
+            detail = str(failure.get("detail") or "").strip()
+            failures_by_provider.setdefault(provider, []).append((title, detail))
+
+    lines: list[str] = []
+    if failures_by_provider:
+        lines.append("Hash lookup errors:")
+    for provider in sorted(failures_by_provider, key=str.casefold):
+        failures = failures_by_provider[provider]
+        if len(failures) >= detail_limit:
+            lines.append(f"{len(failures):,} errors matching based on hash at {provider}.")
+            continue
+        lines.append(
+            f"{provider} hash matching failed for {len(failures)} file"
+            f"{'s' if len(failures) != 1 else ''}:"
+        )
+        for title, detail in failures:
+            lines.append(f"  - {title}")
+            if detail:
+                lines.append(f"    {detail}")
+    return lines
+
+
 def post_json(url: str, body: str, headers: dict[str, str]) -> list | dict:
     request = urllib.request.Request(url, data=body.encode("utf-8"), headers=headers, method="POST")
     try:
@@ -172,6 +460,29 @@ def post_json(url: str, body: str, headers: dict[str, str]) -> list | dict:
         if exc.code == 403:
             raise LookupError("The provider refused the request (403 Forbidden). Check the account/API key, and try again later if the service is rate-limiting.") from exc
         raise
+
+
+def post_form_json(url: str, fields: dict[str, str]) -> dict:
+    """POST form-encoded fields and parse the JSON response (Twitch OAuth)."""
+    request = urllib.request.Request(
+        url,
+        data=urllib.parse.urlencode(fields).encode("utf-8"),
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+            "User-Agent": WEB_HEADERS.get("User-Agent", APP_NAME),
+        },
+        method="POST",
+    )
+    try:
+        payload = json.loads(urllib.request.urlopen(request, timeout=30).read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        if exc.code in (400, 401, 403):
+            raise LookupError("The authentication service rejected the credentials. Check the Client ID and Client Secret.") from exc
+        raise
+    if not isinstance(payload, dict):
+        raise LookupError("The authentication service returned an unexpected response.")
+    return payload
 
 
 def fetch_bytes(url: str, headers: dict[str, str] | None = None) -> bytes:
@@ -185,15 +496,18 @@ def fetch_bytes(url: str, headers: dict[str, str] | None = None) -> bytes:
 
 
 def title_regions(title: str) -> set[str]:
+    # Region names count only as complete words, avoiding titles such as
+    # "Europeans" or "Japanese Garden" being treated as regional releases.
+    value = str(title or "").casefold()
     regions: set[str] = set()
-    if "USA" in title:
+    if re.search(r"\b(?:usa|us)\b", value):
         regions.add("USA")
-    if "Europe" in title:
+    if re.search(r"\b(?:europe|eu)\b", value):
         regions.add("Europe")
-    if "Japan" in title:
+    if re.search(r"\b(?:japan|jp)\b", value):
         regions.add("Japan")
-    other_markers = ("Australia", "World", "China", "Korea", "Asia", "Taiwan", "Hong Kong")
-    if any(marker in title for marker in other_markers):
+    other_markers = ("australia", "world", "china", "korea", "asia", "taiwan", "hong kong")
+    if any(re.search(rf"\b{re.escape(marker)}\b", value) for marker in other_markers):
         regions.add("Other")
     return regions or {"Other"}
 
@@ -231,13 +545,50 @@ def title_search_compatible(query: str, candidate: str) -> bool:
 
 
 def variant_rank(title: str) -> int:
+    """Return a penalty for non-standard releases; lower always wins.
+
+    Provider APIs and filename indexes often return prototypes, demos, hacks,
+    translations, and other non-retail variants alongside the retail game. Keep
+    these candidates available for manual preview, but rank an unmarked retail
+    release ahead of them when choosing a default result.
+    """
+    value = str(title or "").casefold().replace("_", " ")
+
+    # A provider response explicitly marked as a ROM checksum match is an
+    # exact-identity match, so it outranks even an otherwise unmarked retail
+    # title. Hashing remains opt-in and is only queried after name matching fails.
+    if re.search(r"\brom\s+(?:crc|md5|sha-?1|hash)\s+match\b", value):
+        return -100
+
     rank = 0
-    if "Virtual Console" in title:
+
+    # Official rereleases/alternate revisions are less preferred than the
+    # original retail title, but are ranked ahead of obvious non-retail builds.
+    if re.search(r"\bvirtual[ -]?console\b", value):
         rank += 2
-    if any(marker in title for marker in ("(Proto", "(Beta", "(Demo")):
-        rank += 3
-    if "(Alt)" in title:
+    if re.search(r"\b(?:alt|alternate|alternative)(?:\s*\d+)?\b", value):
         rank += 4
+    if re.search(r"\brev(?:ision)?\s*\d+\b", value):
+        rank += 2
+
+    development_variant = re.search(
+        r"\b(?:alpha|beta|proto(?:type)?|demo|sample|preview|unreleased|internal|"
+        r"debug|wip|test(?:\s+(?:build|version|rom))?|development(?:\s+(?:build|version))?|"
+        r"dev[ -]?build|pre[ -]?release|work[ -]?in[ -]?progress)\b",
+        value,
+    )
+    modified_variant = re.search(
+        r"\b(?:rom[ -]?hack|hack(?:ed|ing)?|mod(?:ded|ification)?|randomi[sz]er|"
+        r"fan[ -]?translation|translation|translated|bootleg|pirate|trainer|patched|"
+        r"redux|remix|homebrew|cheat(?:ed)?|repacked?)\b",
+        value,
+    )
+    # Common GoodTools/ROM-set tags for hacks, bad dumps, and fan translations.
+    dump_tag = re.search(r"\[(?:h\d*|b\d*|t\d?(?:[+-][a-z]{2,5})?)\]", value)
+    if development_variant:
+        rank += 5
+    if modified_variant or dump_tag:
+        rank += 6
     return rank
 
 
@@ -258,19 +609,29 @@ def load_libretro_source_index(
     refresh: bool = False,
 ) -> list[str]:
     if cache_path.exists() and not refresh:
-        cached_names = json.loads(cache_path.read_text(encoding="utf-8"))
-        if isinstance(cached_names, list) and cached_names:
-            return cached_names
+        try:
+            cached_names = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(cached_names, list) and cached_names and all(
+                isinstance(name, str) and name.lower().endswith(".png") for name in cached_names
+            ):
+                return cached_names
+        except (OSError, ValueError, TypeError):
+            pass
     data = json.loads(http_get(libretro_tree_url(system)).decode("utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("tree"), list):
+        raise ValueError("Libretro returned an invalid thumbnail index")
     prefix = f"{folder}/"
     names = sorted(
         Path(item["path"]).name
         for item in data.get("tree", [])
-        if item.get("path", "").startswith(prefix)
-        and item.get("path", "").lower().endswith(".png")
+        if isinstance(item, dict)
+        and isinstance(item.get("path"), str)
+        and item["path"].startswith(prefix)
+        and item["path"].lower().endswith(".png")
     )
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps(names, indent=2), encoding="utf-8")
+    if not names:
+        raise LookupError(f"Libretro returned no artwork entries for {system}/{folder}")
+    write_json_atomic(cache_path, names)
     return names
 
 
@@ -314,6 +675,7 @@ class ProviderResult:
     label: str
     image_data: bytes
     system: str = DEFAULT_SYSTEM
+    source_path: str | None = None
 
 
 @dataclass
@@ -338,6 +700,156 @@ class CustomRomItem:
     size: str = "80x80"
     crop: dict | None = None
     system: str = ""
+    rom_relative_path: str = ""
+
+
+@dataclass
+class SdRomCandidate:
+    path: Path
+    system: str
+    title: str
+    relative: str
+    libretro_art_name: str | None
+
+
+@dataclass
+class SdArtworkMatch:
+    path: Path
+    system: str
+    art_name: str
+    relative: str
+    provider: str = "Libretro"
+    image_data: bytes | None = None
+    source_path: str | None = None
+
+
+class HashLookupError(LookupError):
+    """Hash search failure retaining the result separately for each provider."""
+
+    def __init__(self, provider_errors: dict[str, str]):
+        self.provider_errors = provider_errors
+        details = "; ".join(
+            f"{provider} hash lookup: {detail}"
+            for provider, detail in provider_errors.items()
+        )
+        super().__init__(f"No usable hash-based artwork match. {details}")
+
+
+class OperationProgressWindow:
+    """Small responsive status window for long-running background operations."""
+
+    def __init__(self, parent: tk.Misc, title: str, heading: str):
+        self.parent = parent
+        self.started_at = time.monotonic()
+        self._progress_mode = "indeterminate"
+        self._clock_after_id = None
+        self.window = tk.Toplevel(parent)
+        self.window.title(title)
+        self.window.configure(bg="#152235")
+        self.window.transient(parent)
+        self.window.resizable(False, False)
+        self.window.protocol("WM_DELETE_WINDOW", lambda: None)
+        self.window.columnconfigure(0, weight=1)
+
+        self.heading_var = tk.StringVar(value=heading)
+        self.detail_var = tk.StringVar(value="The app is working. This window will update as work progresses.")
+        self.elapsed_var = tk.StringVar(value="Elapsed: 00:00")
+        self.progress_var = tk.DoubleVar(value=0.0)
+
+        ttk.Label(
+            self.window,
+            text=title,
+            style="Section.TLabel",
+        ).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 4))
+        ttk.Label(
+            self.window,
+            textvariable=self.heading_var,
+            style="Muted.TLabel",
+            wraplength=520,
+        ).grid(row=1, column=0, sticky="w", padx=18, pady=(2, 8))
+        self.progress_bar = ttk.Progressbar(
+            self.window,
+            orient="horizontal",
+            mode="indeterminate",
+            maximum=100,
+            variable=self.progress_var,
+            length=520,
+        )
+        self.progress_bar.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 8))
+        self.progress_bar.start(12)
+        ttk.Label(
+            self.window,
+            textvariable=self.detail_var,
+            style="Muted.TLabel",
+            wraplength=520,
+        ).grid(row=3, column=0, sticky="w", padx=18, pady=(0, 8))
+        ttk.Label(
+            self.window,
+            textvariable=self.elapsed_var,
+            style="Muted.TLabel",
+        ).grid(row=4, column=0, sticky="w", padx=18, pady=(0, 16))
+
+        self.window.update_idletasks()
+        x = parent.winfo_rootx() + max(0, (parent.winfo_width() - self.window.winfo_width()) // 2)
+        y = parent.winfo_rooty() + max(0, (parent.winfo_height() - self.window.winfo_height()) // 2)
+        self.window.geometry(f"+{x}+{y}")
+        self.window.grab_set()
+        self._tick_elapsed()
+
+    def _tick_elapsed(self):
+        try:
+            if not self.window.winfo_exists():
+                return
+            elapsed = max(0, int(time.monotonic() - self.started_at))
+            minutes, seconds = divmod(elapsed, 60)
+            hours, minutes = divmod(minutes, 60)
+            if hours:
+                formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            else:
+                formatted = f"{minutes:02d}:{seconds:02d}"
+            self.elapsed_var.set(f"Elapsed: {formatted}")
+            self._clock_after_id = self.parent.after(1000, self._tick_elapsed)
+        except tk.TclError:
+            return
+
+    def update_progress(
+        self,
+        heading: str,
+        current: int | None = None,
+        total: int | None = None,
+        detail: str = "",
+    ):
+        try:
+            if not self.window.winfo_exists():
+                return
+            self.heading_var.set(heading)
+            self.detail_var.set(detail or "Please wait…")
+            if current is not None and total is not None and total > 0:
+                if self._progress_mode != "determinate":
+                    self.progress_bar.stop()
+                    self.progress_bar.configure(mode="determinate")
+                    self._progress_mode = "determinate"
+                self.progress_var.set(max(0.0, min(100.0, current / total * 100.0)))
+            elif self._progress_mode != "indeterminate":
+                self.progress_var.set(0.0)
+                self.progress_bar.configure(mode="indeterminate")
+                self.progress_bar.start(12)
+                self._progress_mode = "indeterminate"
+        except tk.TclError:
+            pass
+
+    def close(self):
+        try:
+            if self._clock_after_id is not None:
+                self.parent.after_cancel(self._clock_after_id)
+            self.progress_bar.stop()
+            try:
+                self.window.grab_release()
+            except tk.TclError:
+                pass
+            self.window.destroy()
+        except tk.TclError:
+            pass
 
 
 def validate_custom_art_name(value: str) -> str:
@@ -371,6 +883,15 @@ class Providers:
         self.libretro_indexes: dict[tuple[str, str], list[str]] = {}
         self.libretro_direct_indexes: dict[tuple, tuple[dict[str, str], list[str]]] = {}
         self.local_art_index = None
+        self.local_art_index_root: Path | None = None
+        self.local_art_files: list = []
+        self.local_art_indexes_by_system: dict[str, dict[str, list]] = {}
+        self.local_art_token_indexes_by_system: dict[str, dict[str, list]] = {}
+        self._igdb_access_token = ""
+        self._igdb_token_expires_at = 0.0
+        self._igdb_platform_ids: dict[str, int] = {}
+        self._igdb_platform_catalog: list[dict] | None = None
+        self._screenscraper_system_records: list[dict] | None = None
 
     def search(
         self,
@@ -399,17 +920,132 @@ class Providers:
         system: str = DEFAULT_SYSTEM,
     ) -> list[ProviderResult]:
         provider = provider_key(provider)
+        # Optional global preference: matching local art wins before provider lookups.
+        if provider != "Local Pack" and self._local_pack_priority_enabled():
+            try:
+                local_results = self.search_local_pack_many(query, max_results, system=system)
+                usable_local = [
+                    result for result in local_results if is_valid_image_data(result.image_data)
+                ]
+                if usable_local:
+                    return usable_local if max_results is None else usable_local[:max_results]
+            except Exception:
+                # A local miss must never block the ordinary provider flow.
+                pass
+        if provider == "Libretro":
+            errors: list[str] = []
+            try:
+                libretro_results = self.search_libretro_many(query, max_results, libretro_source, system)
+                usable_results = [
+                    result for result in libretro_results if is_valid_image_data(result.image_data)
+                ]
+                if usable_results:
+                    return usable_results
+                raise LookupError("Libretro returned no usable image data for this match.")
+            except Exception as libretro_error:
+                errors.append(f"Libretro: {libretro_error}")
+            return self.search_fallback_many(
+                query,
+                max_results=max_results,
+                system=system,
+                after_provider="Libretro",
+                prior_errors=errors,
+            )
+        results = self._search_direct_many(provider, query, max_results, libretro_source, system)
+        usable_results = [result for result in results if is_valid_image_data(result.image_data)]
+        if not usable_results:
+            raise LookupError(f"{provider} returned no valid or complete image data for {query!r}.")
+        return usable_results if max_results is None else usable_results[:max_results]
+
+    def _search_direct_many(
+        self,
+        provider: str,
+        query: str,
+        max_results: int | None,
+        libretro_source: str | None,
+        system: str,
+    ) -> list[ProviderResult]:
+        if provider == "Local Pack":
+            return self.search_local_pack_many(query, max_results, system=system)
+        if provider == "IGDB":
+            return self.search_igdb_many(query, max_results, system=system)
+        if provider == "TheGamesDB":
+            return self.search_thegamesdb_many(query, max_results, system=system)
+        if provider == "ScreenScraper":
+            return self.search_screenscraper_many(query, max_results, system=system)
         if provider == "Libretro":
             return self.search_libretro_many(query, max_results, libretro_source, system)
-        if provider == "Local Pack":
-            return self.search_local_pack_many(query, max_results)
-        if provider == "IGDB":
-            return self.search_igdb_many(query, max_results)
-        if provider == "TheGamesDB":
-            return self.search_thegamesdb_many(query, max_results)
-        if provider == "ScreenScraper":
-            return self.search_screenscraper_many(query, max_results)
         raise ValueError(f"Unknown provider: {provider}")
+
+    def _credential_value(self, name: str) -> str:
+        variable = getattr(self.app, name, None)
+        return variable.get().strip() if variable is not None else ""
+
+    def _local_pack_priority_enabled(self) -> bool:
+        # Use the instance dictionary to avoid tkinter.Misc.__getattr__ recursion
+        # for lightweight test doubles that do not create a Tcl interpreter.
+        variable = vars(self.app).get("local_pack_priority_var")
+        return bool(variable is not None and variable.get())
+
+    def provider_is_configured(self, provider: str) -> bool:
+        if provider == "TheGamesDB":
+            return bool(self._credential_value("tgdb_key_var"))
+        if provider == "ScreenScraper":
+            return bool(
+                self._credential_value("ss_dev_id_var")
+                and self._credential_value("ss_dev_pass_var")
+            )
+        if provider == "IGDB":
+            return bool(
+                self._credential_value("igdb_client_var")
+                and (self._credential_value("igdb_secret_var") or self._credential_value("igdb_token_var"))
+            )
+        return provider == "Libretro"
+
+    def search_fallback_many(
+        self,
+        query: str,
+        max_results: int | None = 1,
+        system: str = DEFAULT_SYSTEM,
+        after_provider: str = "Libretro",
+        prior_errors: list[str] | None = None,
+    ) -> list[ProviderResult]:
+        """Search providers in the fixed automatic order after a miss/failure.
+
+        Invalid image bytes count as a provider failure and do not block attempts
+        against later services. Explicit manual provider searches still remain
+        scoped to the provider the user selected.
+        """
+        order = list(AUTOMATIC_PROVIDER_ORDER)
+        normalized_after = provider_key(after_provider)
+        try:
+            start_index = order.index(normalized_after) + 1
+        except ValueError:
+            start_index = 0
+        errors = list(prior_errors or [])
+        requested_limit = 20 if max_results is None else max(1, int(max_results))
+        for provider in order[start_index:]:
+            if not self.provider_is_configured(provider):
+                if provider == "TheGamesDB":
+                    detail = "API key not configured (Settings → Provider Credentials)"
+                elif provider == "ScreenScraper":
+                    detail = "developer ID/password not configured (Settings → Provider Credentials)"
+                else:
+                    detail = "Client ID and Client Secret not configured (Settings → Provider Credentials)"
+                errors.append(f"{provider}: {detail}")
+                continue
+            try:
+                results = self._search_direct_many(provider, query, requested_limit, None, system)
+                usable = [result for result in results if is_valid_image_data(result.image_data)]
+                if usable:
+                    return usable[:requested_limit]
+                raise LookupError("provider returned no usable or complete image data")
+            except Exception as exc:
+                errors.append(f"{provider}: {exc}")
+        details = "\n".join(f"• {detail}" for detail in errors)
+        raise LookupError(
+            f"No usable artwork found for {query!r} on {system}. The provider fallback chain was exhausted.\n\n{details}"
+        )
 
     def get_libretro_index(self, system: str, folder: str) -> list[str]:
         key = (system, folder)
@@ -428,7 +1064,11 @@ class Providers:
                     for name in self.get_libretro_index(system, folder)
                     if not use_region_filter or self.app.region_allowed(name)
                 ],
-                key=lambda name: (self.app.region_priority(name) if use_region_filter else 0, name),
+                key=lambda name: (
+                    variant_rank(name),
+                    self.app.region_priority(name) if use_region_filter else 0,
+                    name.casefold(),
+                ),
             )
             exact_index: dict[str, str] = {}
             for name in allowed_index:
@@ -439,14 +1079,20 @@ class Providers:
     def find_libretro_art_name(self, query: str, system: str, folder: str) -> str | None:
         # SD scanning follows the files that are actually installed. Pack-region
         # preferences must not hide a World, Japan, or other regional ROM here.
-        allowed_index = sorted(self.get_libretro_index(system, folder))
+        allowed_index = sorted(
+            self.get_libretro_index(system, folder),
+            key=lambda name: (variant_rank(name), name.casefold()),
+        )
         literal_index = {Path(name).stem.casefold(): name for name in allowed_index}
         exact_index: dict[str, str] = {}
         for name in allowed_index:
             exact_index.setdefault(normalize_for_match(name), name)
-        exact = literal_index.get(Path(query).stem.casefold())
-        if not exact:
-            exact = exact_index.get(normalize_for_match(query))
+        exact_literal = literal_index.get(Path(query).stem.casefold())
+        # An exact beta/prototype/hack filename should not defeat an available
+        # retail artwork file with the same normalized game title.
+        if exact_literal and variant_rank(exact_literal) == 0:
+            return exact_literal
+        exact = exact_index.get(normalize_for_match(query)) or exact_literal
         if exact:
             return exact
         extension = LIBRETRO_SYSTEMS.get(system, LIBRETRO_SYSTEMS[DEFAULT_SYSTEM])["extensions"][0]
@@ -491,10 +1137,10 @@ class Providers:
                 scored.append((score, name))
         scored.sort(
             key=lambda item: (
+                variant_rank(item[1]),
                 -item[0],
                 self.app.region_priority(item[1]) if system == DEFAULT_SYSTEM else 0,
-                variant_rank(item[1]),
-                item[1],
+                item[1].casefold(),
             )
         )
         if not scored:
@@ -553,7 +1199,10 @@ class Providers:
         folder = LIBRETRO_SOURCE_FOLDERS.get(libretro_source, "Named_Boxarts")
         exact_index, _allowed_index = self.libretro_match_index(DEFAULT_SYSTEM, folder)
         art_by_code_root: dict[str, tuple[str, str]] = {}
-        for entry in sorted(self.app.get_game_library(), key=lambda item: (self.app.region_priority(item.title), item.title)):
+        for entry in sorted(
+            self.app.get_game_library(),
+            key=lambda item: (variant_rank(item.title), self.app.region_priority(item.title), item.title.casefold()),
+        ):
             if not entry.code or not self.app.region_allowed(entry.title):
                 continue
             art_name = exact_index.get(normalize_for_match(entry.path.name))
@@ -612,47 +1261,171 @@ class Providers:
             )
         }
         if matched_code_roots:
-            for entry in sorted(library, key=lambda item: (self.app.region_priority(item.title), item.title)):
+            for entry in sorted(
+                library,
+                key=lambda item: (variant_rank(item.title), self.app.region_priority(item.title), item.title.casefold()),
+            ):
                 if entry.code[:3] in matched_code_roots and self.app.region_allowed(entry.title):
                     queries.append(entry.title)
 
         return list(dict.fromkeys(queries))
 
-    def search_local_pack_many(self, query: str, max_results: int | None = 20) -> list[ProviderResult]:
+    def local_pack_system_aliases(self, system: str) -> set[str]:
+        """Normalized directory names used by common local artwork-pack layouts."""
+        aliases = {_squash_folder_name(system)}
+        aliases.update(key for key, owners in LOCAL_PACK_FOLDER_OWNERS.items() if system in owners)
+        aliases.update(key for key, owners in LOCAL_PACK_BROAD_FOLDER_OWNERS.items() if system in owners)
+        return {alias for alias in aliases if alias}
+
+    def local_pack_art_files_for_system(self, art_files, pack_path: Path, system: str):
+        """Scope matching to the folders that belong to this console.
+
+        Each image is owned by the console named by its folders: the deepest
+        console-specific folder wins ("Nintendo/Game Boy/..." is Game Boy), and a
+        bare brand folder such as "Nintendo" is only used when the path has nothing
+        more specific. Then:
+
+        1. Images owned by the requested console are used if there are any.
+        2. Otherwise images in folders that name no console are used, so a pack
+           that mixes labeled and unlabeled folders still works. Art owned by a
+           different console is never borrowed for this one.
+        3. A pack with no recognizable console folders keeps the legacy
+           whole-pack behavior.
+
+        The configured pack is read-only: this only inspects paths.
+        """
+        accepted = {system, *LOCAL_PACK_COMPATIBLE_SYSTEMS.get(system, ())}
+        folder_cache: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
+        matched = []
+        unlabeled = []
+        recognized_console_folder = False
+        for art in art_files:
+            try:
+                folder_parts = art.path.relative_to(pack_path).parts[:-1]
+            except ValueError:
+                continue
+            owners = frozenset()
+            broad_owners = frozenset()
+            for part in reversed(folder_parts):
+                if part not in folder_cache:
+                    folder_cache[part] = local_pack_folder_owners(part)
+                specific, broad = folder_cache[part]
+                if specific:
+                    owners = specific
+                    break
+                if broad and not broad_owners:
+                    broad_owners = broad
+            owners = owners or broad_owners
+            if not owners:
+                unlabeled.append(art)
+                continue
+            recognized_console_folder = True
+            if owners & accepted:
+                matched.append(art)
+        if matched:
+            return matched, True
+        if recognized_console_folder:
+            return unlabeled, True
+        return list(art_files), False
+
+    def search_local_pack_many(
+        self, query: str, max_results: int | None = 20, system: str = DEFAULT_SYSTEM,
+        respect_regions: bool = True,
+    ) -> list[ProviderResult]:
         pack = self.app.local_pack_var.get().strip()
         if not pack:
             raise LookupError("Choose a local art pack folder first.")
-        pack_path = Path(pack)
-        if self.local_art_index is None:
+        pack_path = Path(pack).expanduser()
+        resolved_pack = pack_path.resolve()
+        if self.local_art_index is None or self.local_art_index_root != resolved_pack:
             primary, europe = iter_art_files(pack_path)
-            self.local_art_index = build_art_index(primary + europe)
+            self.local_art_files = primary + europe
+            self.local_art_index = build_art_index(self.local_art_files)
+            self.local_art_index_root = resolved_pack
+            self.local_art_indexes_by_system = {}
+            self.local_art_token_indexes_by_system = {}
+
+        # Console filtering and token indexes are built once per console, not per title.
+        # This keeps local-first lookups usable for large media collections.
+        index_key = system.casefold()
+        if index_key not in self.local_art_indexes_by_system:
+            scoped_art_files, has_console_folder = self.local_pack_art_files_for_system(
+                self.local_art_files, pack_path, system
+            )
+            self.local_art_indexes_by_system[index_key] = (
+                build_art_index(scoped_art_files) if has_console_folder else self.local_art_index
+            )
+        search_index = self.local_art_indexes_by_system[index_key]
+        if index_key not in self.local_art_token_indexes_by_system:
+            token_index: dict[str, list] = {}
+            seen_paths: set[str] = set()
+            for arts in search_index.values():
+                for art in arts:
+                    path_key = str(art.path).casefold()
+                    if path_key in seen_paths:
+                        continue
+                    seen_paths.add(path_key)
+                    for token in content_tokens(art.title):
+                        token_index.setdefault(token, []).append(art)
+            self.local_art_token_indexes_by_system[index_key] = token_index
+        token_index = self.local_art_token_indexes_by_system[index_key]
+
+        # Local pack filenames are normalized through clean_title(), which drops
+        # release tags. Apply that cleanup only to the local comparison; online
+        # searches retain No-Intro region tags as requested.
+        match_query = clean_title(query).strip() or query.strip()
+        query_tokens = content_tokens(match_query)
+        exact_group = search_index.get(normalize_for_match(match_query), [])
+        if exact_group:
+            candidate_art_files = exact_group
+        elif query_tokens:
+            token_buckets = [token_index.get(token, []) for token in query_tokens]
+            rarest_bucket = min(token_buckets, key=len, default=[])
+            candidate_art_files = [
+                art for art in rarest_bucket
+                if query_tokens.issubset(content_tokens(art.title))
+            ]
+        else:
+            candidate_art_files = [art for arts in search_index.values() for art in arts]
+
         candidates = []
-        for arts in self.local_art_index.values():
-            for art in arts:
-                if not self.app.region_allowed(self.local_art_region_text(art)):
-                    continue
-                score = title_match_score(query, art.title)
-                if score >= 2.2 and title_search_compatible(query, art.title):
-                    candidates.append((score, art))
+        for art in candidate_art_files:
+            if respect_regions and not self.app.region_allowed(self.local_art_region_text(art)):
+                continue
+            score = title_match_score(match_query, art.title)
+            if score >= 2.2 and title_search_compatible(match_query, art.title):
+                candidates.append((score, art))
         candidates.sort(
             key=lambda item: (
-                self.app.region_priority(self.local_art_region_text(item[1])),
-                -item[0],
+                # Parent directories describe pack organization, not the
+                # release represented by this image.
                 variant_rank(item[1].path.name),
-                item[1].path.name,
+                self.app.region_priority(self.local_art_region_text(item[1])) if respect_regions else 0,
+                -item[0],
+                item[1].path.name.casefold(),
             ),
         )
-        if not candidates:
-            art = find_best_art(query, self.local_art_index)
-            candidates = [(99, art)] if art and self.app.region_allowed(self.local_art_region_text(art)) else []
+        if not candidates and (candidate_art_files or not query_tokens):
+            fallback_index = build_art_index(candidate_art_files) if query_tokens else search_index
+            art = find_best_art(match_query, fallback_index)
+            candidates = [
+                (99, art) for art in [art]
+                if art and (not respect_regions or self.app.region_allowed(self.local_art_region_text(art)))
+            ]
         limit = len(candidates) if max_results is None else max_results
         results = [
-            ProviderResult("Local Pack", self.local_art_label(art, pack_path), art.path.read_bytes())
+            ProviderResult(
+                "Local Pack",
+                self.local_art_label(art, pack_path),
+                art.path.read_bytes(),
+                system,
+                str(art.path),
+            )
             for _score, art in candidates[:limit]
             if art
         ]
         if not results:
-            raise LookupError("No local art match found.")
+            raise LookupError(f"No local art match found for {query!r} on {system}.")
         return results
 
     def local_art_region_text(self, art) -> str:
@@ -667,114 +1440,670 @@ class Providers:
         except ValueError:
             return art.path.name
 
-    def search_igdb_many(self, query: str, max_results: int = 20) -> list[ProviderResult]:
-        client_id = self.app.igdb_client_var.get().strip()
-        token = self.app.igdb_token_var.get().strip()
-        if not client_id or not token:
-            raise LookupError("IGDB needs a Client ID and bearer access token.")
-        headers = {
+    def _igdb_auth_headers(self, force_refresh: bool = False) -> dict[str, str]:
+        """Return IGDB API headers, refreshing an OAuth app token as needed.
+
+        New settings use Twitch Client ID + Client Secret. The prior manually
+        supplied access-token setting remains as a compatibility fallback for
+        existing settings files, although those tokens can expire.
+        """
+        client_id = self._credential_value("igdb_client_var")
+        client_secret = self._credential_value("igdb_secret_var")
+        legacy_token = self._credential_value("igdb_token_var")
+        if not client_id:
+            raise LookupError("IGDB needs a Twitch Client ID in Settings → Provider Credentials.")
+        if client_secret:
+            if not force_refresh and self._igdb_access_token and time.time() < self._igdb_token_expires_at:
+                token = self._igdb_access_token
+            else:
+                response = post_form_json(
+                    "https://id.twitch.tv/oauth2/token",
+                    {
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "grant_type": "client_credentials",
+                    },
+                )
+                token = str(response.get("access_token") or "").strip()
+                if not token:
+                    raise LookupError("Twitch OAuth did not return an IGDB access token. Check the Client ID and Client Secret.")
+                try:
+                    lifetime = max(60, int(response.get("expires_in", 3600)))
+                except (TypeError, ValueError):
+                    lifetime = 3600
+                self._igdb_access_token = token
+                self._igdb_token_expires_at = time.time() + lifetime - min(120, lifetime // 10)
+        elif legacy_token:
+            token = legacy_token
+        else:
+            raise LookupError("IGDB needs both a Twitch Client ID and Client Secret in Settings → Provider Credentials.")
+        return {
             "Client-ID": client_id,
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
         }
-        safe_query = query.replace('"', '\\"')
+
+    def test_igdb_credentials(self) -> int:
+        headers = self._igdb_auth_headers(force_refresh=True)
+        payload = post_json("https://api.igdb.com/v4/platforms", "fields id,name; limit 5;", headers)
+        if not isinstance(payload, list) or not payload:
+            raise LookupError("IGDB authenticated, but returned no platform data.")
+        return len(payload)
+
+    def _igdb_platform_id(self, system: str, headers: dict[str, str]) -> int:
+        if system in self._igdb_platform_ids:
+            return self._igdb_platform_ids[system]
+        aliases = IGDB_PLATFORM_ALIASES.get(system, (system,))
+        wanted = {self._platform_key(alias) for alias in aliases}
+        if self._igdb_platform_catalog is None:
+            payload = post_json(
+                "https://api.igdb.com/v4/platforms",
+                "fields id,name,slug; limit 500;",
+                headers,
+            )
+            if not isinstance(payload, list):
+                raise LookupError("IGDB returned an unexpected platform list.")
+            self._igdb_platform_catalog = [item for item in payload if isinstance(item, dict)]
+        for platform in self._igdb_platform_catalog:
+            if self._platform_key(platform.get("name", "")) in wanted or self._platform_key(platform.get("slug", "")) in wanted:
+                try:
+                    platform_id = int(platform["id"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                self._igdb_platform_ids[system] = platform_id
+                return platform_id
+        raise LookupError(
+            f"IGDB did not return a known platform ID for {system}; no cross-console search was performed."
+        )
+
+    def search_igdb_many(
+        self,
+        query: str,
+        max_results: int | None = 20,
+        system: str = DEFAULT_SYSTEM,
+    ) -> list[ProviderResult]:
+        headers = self._igdb_auth_headers()
+        platform_id = self._igdb_platform_id(system, headers)
+        safe_query = query.replace('\\', '\\\\').replace('"', '\\"')
         body = (
             "fields name,cover.image_id,artworks.image_id;"
             f' search "{safe_query}";'
-            f" where platforms = ({GBA_IGDB_PLATFORM_ID}); limit 10;"
+            f" where platforms = ({platform_id}); limit 10;"
         )
         games = post_json("https://api.igdb.com/v4/games", body, headers)
-        results = []
+        if not isinstance(games, list):
+            raise LookupError("IGDB returned an unexpected game-search response.")
+        games = sorted(
+            (game for game in games if isinstance(game, dict)),
+            key=lambda game: (
+                variant_rank(str(game.get("name") or query)),
+                -title_match_score(query, str(game.get("name") or query)),
+                str(game.get("name") or query).casefold(),
+            ),
+        )
+        results: list[ProviderResult] = []
+        limit = 20 if max_results is None else max(1, int(max_results))
         for game in games:
+            if not isinstance(game, dict):
+                continue
             image_ids = []
-            if game.get("artworks"):
-                image_ids.extend(item.get("image_id") for item in game["artworks"] if item.get("image_id"))
-            if game.get("cover") and game["cover"].get("image_id"):
+            if isinstance(game.get("artworks"), list):
+                image_ids.extend(
+                    item.get("image_id") for item in game["artworks"]
+                    if isinstance(item, dict) and item.get("image_id")
+                )
+            if isinstance(game.get("cover"), dict) and game["cover"].get("image_id"):
                 image_ids.append(game["cover"]["image_id"])
             for image_id in image_ids[:5]:
                 url = f"https://images.igdb.com/igdb/image/upload/t_720p/{image_id}.jpg"
-                results.append(ProviderResult("IGDB", f"{game.get('name', query)} - {image_id}", fetch_bytes(url)))
-                if len(results) >= max_results:
+                try:
+                    image_data = fetch_bytes(url)
+                    if not is_valid_image_data(image_data):
+                        continue
+                except Exception:
+                    continue
+                results.append(
+                    ProviderResult("IGDB", f"{game.get('name', query)} - {image_id}", image_data, system)
+                )
+                if len(results) >= limit:
                     return results
         if not results:
-            raise LookupError("No IGDB artwork found.")
-        return results[:max_results]
+            raise LookupError(f"No valid IGDB artwork found for {query!r} on {system}.")
+        return results[:limit]
 
-    def search_thegamesdb_many(self, query: str, max_results: int = 20) -> list[ProviderResult]:
+    @staticmethod
+    def _platform_key(name: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(name).casefold())
+
+    def thegamesdb_platforms(self) -> dict[str, int]:
+        """Load TheGamesDB platform names/IDs, caching them for 30 days."""
         api_key = self.app.tgdb_key_var.get().strip()
         if not api_key:
-            raise LookupError("TheGamesDB needs an API key.")
+            raise LookupError(
+                "Automatic TheGamesDB fallback requires an API key. Add it under Settings → Provider Credentials."
+            )
+        cache_path = self.app.base_dir / CACHE_FOLDER_NAME / "thegamesdb_platforms.json"
+        if cache_path.is_file():
+            try:
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                if not isinstance(cached, dict):
+                    raise ValueError("The cached platform list is not an object")
+                age = time.time() - float(cached.get("fetched_at", 0))
+                raw = cached.get("platforms")
+                if age < 30 * 24 * 60 * 60 and isinstance(raw, dict) and raw:
+                    return {str(name): int(platform_id) for name, platform_id in raw.items()}
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+
+        params = urllib.parse.urlencode({"apikey": api_key})
+        response = request_json(f"{THEGAMESDB_BASE_URL}/v1/Platforms?{params}", WEB_HEADERS)
+        platform_data = response.get("data", {}).get("platforms") or {}
+        entries = []
+        if isinstance(platform_data, dict):
+            for key, value in platform_data.items():
+                if not isinstance(value, dict):
+                    continue
+                platform_id = value.get("id", key)
+                name = value.get("name") or value.get("platform_name")
+                if name and str(platform_id).isdigit():
+                    entries.append((str(name), int(platform_id)))
+        elif isinstance(platform_data, list):
+            for value in platform_data:
+                if not isinstance(value, dict):
+                    continue
+                platform_id = value.get("id")
+                name = value.get("name") or value.get("platform_name")
+                if name and str(platform_id).isdigit():
+                    entries.append((str(name), int(platform_id)))
+        if not entries:
+            raise LookupError("TheGamesDB returned no usable platform list.")
+
+        platforms = {name: platform_id for name, platform_id in entries}
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps({"fetched_at": time.time(), "platforms": platforms}, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        return platforms
+
+    @staticmethod
+    def test_thegamesdb_api_key(api_key: str) -> int:
+        """Validate a TheGamesDB API key with a fresh authenticated request.
+
+        This deliberately bypasses the platform cache so the Settings button
+        verifies the key the user has currently entered, not stale cached data.
+        """
+        key = api_key.strip()
+        if not key:
+            raise LookupError("Enter your TheGamesDB API key first.")
+        params = urllib.parse.urlencode({"apikey": key})
+        response = request_json(f"{THEGAMESDB_BASE_URL}/v1/Platforms?{params}", WEB_HEADERS)
+        payload = response.get("data", {}) if isinstance(response, dict) else {}
+        platforms = payload.get("platforms") if isinstance(payload, dict) else None
+        if isinstance(platforms, dict):
+            count = sum(1 for value in platforms.values() if isinstance(value, dict))
+        elif isinstance(platforms, list):
+            count = sum(1 for value in platforms if isinstance(value, dict))
+        else:
+            count = 0
+        if count <= 0:
+            message = "TheGamesDB did not return a platform list. Check the API key and try again."
+            if isinstance(response, dict):
+                detail = response.get("status") or response.get("message")
+                if detail:
+                    message = f"TheGamesDB rejected or could not validate the key: {detail}"
+            raise LookupError(message)
+        return count
+
+    def thegamesdb_platform_id(self, system: str) -> int:
+        aliases = THEGAMESDB_PLATFORM_ALIASES.get(system, (system,))
+        platforms = self.thegamesdb_platforms()
+        by_normalized = {self._platform_key(name): platform_id for name, platform_id in platforms.items()}
+        for alias in aliases:
+            found = by_normalized.get(self._platform_key(alias))
+            if found is not None:
+                return found
+        raise LookupError(
+            f"TheGamesDB does not list a known platform mapping for {system}. "
+            "No cross-console search was performed to avoid attaching artwork from the wrong system."
+        )
+
+    def search_thegamesdb_many(
+        self,
+        query: str,
+        max_results: int | None = 20,
+        system: str = DEFAULT_SYSTEM,
+    ) -> list[ProviderResult]:
+        api_key = self.app.tgdb_key_var.get().strip()
+        if not api_key:
+            raise LookupError("TheGamesDB fallback needs an API key. Add one under Settings → Provider Credentials.")
+        platform_id = self.thegamesdb_platform_id(system)
         params = urllib.parse.urlencode(
             {
                 "apikey": api_key,
                 "name": query,
-                "filter[platform]": "Game Boy Advance",
-                "include": "boxart",
+                "filter[platform]": str(platform_id),
+                "include": "boxart,platform",
             }
         )
-        data = request_json(f"https://api.thegamesdb.net/v1/Games/ByGameName?{params}", WEB_HEADERS)
-        games = data.get("data", {}).get("games") or []
+        data = request_json(f"{THEGAMESDB_BASE_URL}/v1.1/Games/ByGameName?{params}", WEB_HEADERS)
+        payload = data.get("data", {})
+        games = payload.get("games") or []
+        games = sorted(
+            (game for game in games if isinstance(game, dict)),
+            key=lambda game: (
+                variant_rank(str(game.get("game_title") or game.get("name") or query)),
+                -title_match_score(query, str(game.get("game_title") or game.get("name") or query)),
+                str(game.get("game_title") or game.get("name") or query).casefold(),
+            ),
+        )
         include = data.get("include", {})
         boxart = include.get("boxart", {})
         base = boxart.get("base_url", {}).get("original") or boxart.get("base_url", {}).get("large") or ""
         images = boxart.get("data") or boxart.get("images") or {}
-        results = []
-        for game in games:
-            game_id = str(game.get("id"))
-            game_images = images.get(game_id) or []
-            for image in game_images:
-                filename = image.get("filename") or image.get("thumb")
-                if filename:
-                    results.append(ProviderResult("TheGamesDB", f"{game.get('game_title', query)} - {filename}", fetch_bytes(base + filename)))
-                    if len(results) >= max_results:
-                        return results
-        if not results:
-            raise LookupError("No TheGamesDB box art found.")
-        return results[:max_results]
+        results: list[ProviderResult] = []
+        limit = 20 if max_results is None else max_results
 
-    def search_screenscraper_many(self, query: str, max_results: int = 20) -> list[ProviderResult]:
-        devid = self.app.ss_dev_id_var.get().strip()
-        devpassword = self.app.ss_dev_pass_var.get().strip()
-        ssid = self.app.ss_user_var.get().strip()
-        sspassword = self.app.ss_pass_var.get().strip()
+        def image_priority(image: dict) -> tuple[int, str]:
+            side = str(image.get("side") or image.get("type") or "").casefold()
+            filename = str(image.get("filename") or image.get("url") or "").casefold()
+            is_front = side == "front" or "/front/" in filename or filename.startswith("front/")
+            is_back = side == "back" or "/back/" in filename or filename.startswith("back/")
+            return (0 if is_front else 2 if is_back else 1, filename)
+
+        for game in games:
+            game_title = str(game.get("game_title") or game.get("name") or query)
+            # Do not accept a sequel/remake simply because the API's search is fuzzy.
+            if title_match_score(query, game_title) < 1.6 or not title_search_compatible(query, game_title):
+                continue
+            game_id = str(game.get("id", ""))
+            game_images = images.get(game_id) or images.get(str(game.get("id", ""))) or []
+            if isinstance(game_images, dict):
+                game_images = list(game_images.values())
+            if not isinstance(game_images, list):
+                continue
+            for image in sorted((image for image in game_images if isinstance(image, dict)), key=image_priority):
+                image_path = image.get("filename") or image.get("url") or image.get("thumb")
+                if not image_path:
+                    continue
+                image_path = str(image_path).strip()
+                if image_path.startswith(("http://", "https://")):
+                    image_url = image_path
+                elif image_path.startswith("/images/"):
+                    image_url = urllib.parse.urljoin(base, image_path)
+                else:
+                    image_url = urllib.parse.urljoin(base, image_path.lstrip("/"))
+                try:
+                    image_data = fetch_bytes(image_url)
+                    if not is_valid_image_data(image_data):
+                        continue
+                except Exception:
+                    continue
+                results.append(ProviderResult("TheGamesDB", f"{game_title} - {Path(str(image_path)).name}", image_data, system))
+                if len(results) >= limit:
+                    return results
+        if not results:
+            raise LookupError(f"No TheGamesDB box art match found for {query!r} on {system}.")
+        return results
+
+    def search_thegamesdb_hash_many(
+        self,
+        hashes: dict[str, str | int],
+        query: str,
+        max_results: int | None = 1,
+        system: str = DEFAULT_SYSTEM,
+    ) -> list[ProviderResult]:
+        """Resolve a ROM hash through TheGamesDB, keeping results platform-scoped."""
+        api_key = self._credential_value("tgdb_key_var")
+        if not api_key:
+            raise LookupError("TheGamesDB hash matching needs an API key in Settings → Provider Credentials.")
+        platform_id = self.thegamesdb_platform_id(system)
+        errors: list[str] = []
+        # CRC is the lightest/commonest No-Intro key; MD5/SHA-1 are tried only if
+        # the endpoint reports no usable artwork for the earlier checksum type.
+        for hash_type in ("crc", "md5", "sha1"):
+            hash_value = str(hashes.get(hash_type) or "").strip()
+            if not hash_value:
+                continue
+            params = urllib.parse.urlencode(
+                {
+                    "apikey": api_key,
+                    "hash": hash_value,
+                    "filter[type]": hash_type,
+                    "filter[platform]": str(platform_id),
+                    "include": "boxart,platform",
+                }
+            )
+            try:
+                data = request_json(f"{THEGAMESDB_BASE_URL}/v1/Games/ByGameHash?{params}", WEB_HEADERS)
+                payload = data.get("data", {}) if isinstance(data, dict) else {}
+                games = payload.get("games") or [] if isinstance(payload, dict) else []
+                if isinstance(games, dict):
+                    games = list(games.values())
+                if not isinstance(games, list) or not games:
+                    errors.append(f"TheGamesDB {hash_type.upper()}: no game match")
+                    continue
+                include = data.get("include", {}) if isinstance(data, dict) else {}
+                boxart = include.get("boxart", {}) if isinstance(include, dict) else {}
+                base = boxart.get("base_url", {}).get("original") or boxart.get("base_url", {}).get("large") or ""
+                images = boxart.get("data") or boxart.get("images") or {}
+                results: list[ProviderResult] = []
+                limit = 20 if max_results is None else max(1, int(max_results))
+
+                def image_priority(image: dict) -> tuple[int, str]:
+                    side = str(image.get("side") or image.get("type") or "").casefold()
+                    filename = str(image.get("filename") or image.get("url") or "").casefold()
+                    is_front = side == "front" or "/front/" in filename or filename.startswith("front/")
+                    is_back = side == "back" or "/back/" in filename or filename.startswith("back/")
+                    return (0 if is_front else 2 if is_back else 1, filename)
+
+                for game in games:
+                    if not isinstance(game, dict):
+                        continue
+                    game_title = str(game.get("game_title") or game.get("name") or query)
+                    game_id = str(game.get("id", ""))
+                    game_images = images.get(game_id) or images.get(str(game.get("id", ""))) or [] if isinstance(images, dict) else []
+                    if isinstance(game_images, dict):
+                        game_images = list(game_images.values())
+                    if not isinstance(game_images, list):
+                        continue
+                    for image in sorted((item for item in game_images if isinstance(item, dict)), key=image_priority):
+                        image_path = image.get("filename") or image.get("url") or image.get("thumb")
+                        if not image_path:
+                            continue
+                        image_path = str(image_path).strip()
+                        if image_path.startswith(("http://", "https://")):
+                            image_url = image_path
+                        elif image_path.startswith("/images/"):
+                            image_url = urllib.parse.urljoin(base, image_path)
+                        else:
+                            image_url = urllib.parse.urljoin(base, image_path.lstrip("/"))
+                        try:
+                            image_data = fetch_bytes(image_url)
+                            if not is_valid_image_data(image_data):
+                                continue
+                        except Exception:
+                            continue
+                        results.append(
+                            ProviderResult(
+                                "TheGamesDB",
+                                f"{game_title} - {Path(str(image_path)).name} [ROM {hash_type.upper()} match]",
+                                image_data,
+                                system,
+                            )
+                        )
+                        if len(results) >= limit:
+                            return results
+                if results:
+                    return results
+                errors.append(f"TheGamesDB {hash_type.upper()}: matching game had no usable box art")
+            except Exception as exc:
+                errors.append(f"TheGamesDB {hash_type.upper()}: {exc}")
+        raise LookupError("; ".join(errors) if errors else "No usable TheGamesDB ROM-hash result.")
+
+    def _screenscraper_credentials(self) -> dict[str, str]:
+        devid = self._credential_value("ss_dev_id_var")
+        devpassword = self._credential_value("ss_dev_pass_var")
         if not devid or not devpassword:
-            raise LookupError("ScreenScraper needs developer credentials. This is an advanced/paid provider.")
-        if not ssid or not sspassword:
-            raise LookupError("ScreenScraper needs your username and password as well as developer credentials.")
-        params = urllib.parse.urlencode(
-            {
-                "devid": devid,
-                "devpassword": devpassword,
-                "softname": APP_NAME,
-                "ssid": ssid,
-                "sspassword": sspassword,
-                "systemeid": GBA_SCREENSCRAPER_SYSTEM_ID,
-                "recherche": query,
-                "output": "json",
-            }
+            raise LookupError(
+                "ScreenScraper fallback needs a developer ID and developer password in Settings → Provider Credentials. "
+                "ScreenScraper developer access may need to be requested from the service."
+            )
+        params = {
+            "devid": devid,
+            "devpassword": devpassword,
+            "softname": APP_NAME,
+            "output": "json",
+        }
+        ssid = self._credential_value("ss_user_var")
+        sspassword = self._credential_value("ss_pass_var")
+        if ssid and sspassword:
+            params["ssid"] = ssid
+            params["sspassword"] = sspassword
+        elif ssid or sspassword:
+            raise LookupError("ScreenScraper username and password must either both be filled in or both be blank.")
+        return params
+
+    @staticmethod
+    def _screen_system_names(system_record: dict) -> list[str]:
+        names: list[str] = []
+        name_keys = {"nom", "name", "nomcourt", "nom_court", "nomlong", "nom_long", "nom_eu", "nom_us", "nom_jp", "nom_fr", "nom_en", "alias", "aliases"}
+
+        def collect(value, key_hint: str = ""):
+            if isinstance(value, str):
+                if key_hint in name_keys or "nom" in key_hint or "name" in key_hint or "alias" in key_hint:
+                    cleaned = value.strip()
+                    if cleaned and cleaned not in names:
+                        names.append(cleaned)
+            elif isinstance(value, dict):
+                for child_key, child_value in value.items():
+                    normalized_key = str(child_key).casefold()
+                    if normalized_key in name_keys or "nom" in normalized_key or "name" in normalized_key or "alias" in normalized_key:
+                        collect(child_value, normalized_key)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item, key_hint)
+
+        for key, value in system_record.items():
+            normalized_key = str(key).casefold()
+            if normalized_key in name_keys or "nom" in normalized_key or "name" in normalized_key or "alias" in normalized_key:
+                collect(value, normalized_key)
+        return names
+
+    def screenscraper_systems(self, refresh: bool = False) -> list[dict]:
+        if self._screenscraper_system_records is not None and not refresh:
+            return self._screenscraper_system_records
+        params = self._screenscraper_credentials()
+        payload = request_json(
+            "https://www.screenscraper.fr/api2/systemesListe.php?" + urllib.parse.urlencode(params),
+            WEB_HEADERS,
         )
-        results = []
-        data = request_json(f"https://www.screenscraper.fr/api2/jeuRecherche.php?{params}", WEB_HEADERS)
-        games = data.get("response", {}).get("jeux", {}).get("jeu") or []
+        response = payload.get("response", {}) if isinstance(payload, dict) else {}
+        systems_block = response.get("systemes", {}) if isinstance(response, dict) else {}
+        systems = systems_block.get("systeme", []) if isinstance(systems_block, dict) else systems_block
+        if isinstance(systems, dict):
+            systems = [systems]
+        if not isinstance(systems, list):
+            systems = []
+        records = []
+        for item in systems:
+            if not isinstance(item, dict):
+                continue
+            system_id = item.get("id") or item.get("systemeid")
+            names = self._screen_system_names(item)
+            if system_id is not None and names:
+                records.append({"id": str(system_id), "names": names})
+        if not records:
+            detail = response.get("message") or response.get("erreur") or "no systems were returned"
+            raise LookupError(f"ScreenScraper did not return a usable system list ({detail}). Check developer credentials.")
+        self._screenscraper_system_records = records
+        return records
+
+    def screenscraper_system_id(self, system: str) -> str:
+        aliases = SCREENSCRAPER_SYSTEM_ALIASES.get(system, (system,))
+        wanted = {self._platform_key(alias) for alias in aliases}
+        for record in self.screenscraper_systems():
+            if wanted.intersection(self._platform_key(name) for name in record["names"]):
+                return str(record["id"])
+        raise LookupError(
+            f"ScreenScraper has no known system mapping for {system}; no cross-console search was performed."
+        )
+
+    def test_screenscraper_credentials(self) -> int:
+        systems = self.screenscraper_systems(refresh=True)
+        return len(systems)
+
+    def search_screenscraper_many(
+        self,
+        query: str,
+        max_results: int | None = 20,
+        system: str = DEFAULT_SYSTEM,
+    ) -> list[ProviderResult]:
+        params = self._screenscraper_credentials()
+        params["systemeid"] = self.screenscraper_system_id(system)
+        params["recherche"] = query
+        data = request_json(
+            "https://www.screenscraper.fr/api2/jeuRecherche.php?" + urllib.parse.urlencode(params),
+            WEB_HEADERS,
+        )
+        response = data.get("response", {}) if isinstance(data, dict) else {}
+        games_block = response.get("jeux", {}) if isinstance(response, dict) else {}
+        games = games_block.get("jeu", []) if isinstance(games_block, dict) else games_block
         if isinstance(games, dict):
             games = [games]
+        if not isinstance(games, list):
+            games = []
+        games = sorted(
+            (game for game in games if isinstance(game, dict)),
+            key=lambda game: (
+                variant_rank(str(game.get("nom") or game.get("nom_eu") or game.get("name") or query)),
+                -title_match_score(query, str(game.get("nom") or game.get("nom_eu") or game.get("name") or query)),
+                str(game.get("nom") or game.get("nom_eu") or game.get("name") or query).casefold(),
+            ),
+        )
+        results: list[ProviderResult] = []
+        limit = 20 if max_results is None else max(1, int(max_results))
+        preferred_types = ("box-2D", "box-3D", "wheel-hd", "wheel", "sstitle", "screenmarquee", "steamgrid")
         for game in games:
-            medias = game.get("medias", {}).get("media", [])
+            if not isinstance(game, dict):
+                continue
+            title = game.get("nom") or game.get("nom_eu") or game.get("name") or query
+            medias_block = game.get("medias", {})
+            medias = medias_block.get("media", []) if isinstance(medias_block, dict) else medias_block
             if isinstance(medias, dict):
                 medias = [medias]
-            title = game.get("nom") or query
-            for preferred in ("box-2D", "steamgrid", "sstitle", "screenmarquee"):
+            if not isinstance(medias, list):
+                medias = []
+            for preferred in preferred_types:
                 for media in medias:
-                    if media.get("type") == preferred and media.get("url"):
-                        results.append(ProviderResult("ScreenScraper", f"{title} - {preferred}", fetch_bytes(media["url"])))
-                        if len(results) >= max_results:
-                            return results
+                    if not isinstance(media, dict) or media.get("type") != preferred or not media.get("url"):
+                        continue
+                    try:
+                        image_data = fetch_bytes(str(media["url"]))
+                        if not is_valid_image_data(image_data):
+                            continue
+                    except Exception:
+                        continue
+                    results.append(ProviderResult("ScreenScraper", f"{title} - {preferred}", image_data, system))
+                    if len(results) >= limit:
+                        return results
         if not results:
-            raise LookupError("No ScreenScraper media found.")
-        return results[:max_results]
+            detail = response.get("message") or response.get("erreur")
+            suffix = f" ({detail})" if detail else ""
+            raise LookupError(f"No valid ScreenScraper box art found for {query!r} on {system}{suffix}.")
+        return results[:limit]
+
+    def search_screenscraper_hash_many(
+        self,
+        rom_path: Path,
+        hashes: dict[str, str | int],
+        query: str,
+        max_results: int | None = 1,
+        system: str = DEFAULT_SYSTEM,
+    ) -> list[ProviderResult]:
+        """Identify a ROM via ScreenScraper's CRC/MD5/SHA-1 and size fields."""
+        params = self._screenscraper_credentials()
+        params.update(
+            {
+                "systemeid": self.screenscraper_system_id(system),
+                "crc": str(hashes.get("crc", "")),
+                "md5": str(hashes.get("md5", "")),
+                "sha1": str(hashes.get("sha1", "")),
+                "romtype": "rom",
+                "romnom": rom_path.name,
+                "romtaille": str(hashes.get("size", rom_path.stat().st_size)),
+            }
+        )
+        data = request_json(
+            "https://www.screenscraper.fr/api2/jeuInfos.php?" + urllib.parse.urlencode(params),
+            WEB_HEADERS,
+        )
+        response = data.get("response", {}) if isinstance(data, dict) else {}
+        game_value = response.get("jeu") or response.get("jeux") or response.get("game")
+        if game_value is None and isinstance(response.get("medias"), (dict, list)):
+            game_value = response
+        if isinstance(game_value, dict):
+            games = [game_value]
+        elif isinstance(game_value, list):
+            games = [item for item in game_value if isinstance(item, dict)]
+        else:
+            games = []
+        results: list[ProviderResult] = []
+        limit = 20 if max_results is None else max(1, int(max_results))
+        preferred_types = ("box-2D", "box-3D", "wheel-hd", "wheel", "sstitle", "screenmarquee", "steamgrid")
+        for game in games:
+            title = game.get("nom") or game.get("nom_eu") or game.get("name") or query
+            medias_block = game.get("medias", {})
+            medias = medias_block.get("media", []) if isinstance(medias_block, dict) else medias_block
+            if isinstance(medias, dict):
+                medias = [medias]
+            if not isinstance(medias, list):
+                continue
+            for preferred in preferred_types:
+                for media in medias:
+                    if not isinstance(media, dict) or media.get("type") != preferred or not media.get("url"):
+                        continue
+                    try:
+                        image_data = fetch_bytes(str(media["url"]))
+                        if not is_valid_image_data(image_data):
+                            continue
+                    except Exception:
+                        continue
+                    results.append(
+                        ProviderResult(
+                            "ScreenScraper", f"{title} - {preferred} [ROM hash match]", image_data, system
+                        )
+                    )
+                    if len(results) >= limit:
+                        return results
+        if not results:
+            detail = response.get("message") or response.get("erreur") if isinstance(response, dict) else None
+            suffix = f" ({detail})" if detail else ""
+            raise LookupError(
+                f"No valid ScreenScraper artwork found by ROM hash for {rom_path.name} on {system}{suffix}."
+            )
+        return results[:limit]
+
+    def search_hash_fallback(
+        self, rom_path: Path, query: str, system: str = DEFAULT_SYSTEM
+    ) -> list[ProviderResult]:
+        """Run opt-in hash lookup after all local and name-based matching fails."""
+        hashes = compute_rom_hashes(rom_path)
+        errors: dict[str, str] = {}
+        if self.provider_is_configured("TheGamesDB"):
+            try:
+                result = self.search_thegamesdb_hash_many(hashes, query, max_results=1, system=system)
+                if result and is_valid_image_data(result[0].image_data):
+                    return result[:1]
+            except Exception as exc:
+                errors["TheGamesDB"] = str(exc)
+        else:
+            errors["TheGamesDB"] = "hash lookup skipped: API key not configured"
+
+        if self.provider_is_configured("ScreenScraper"):
+            try:
+                result = self.search_screenscraper_hash_many(
+                    rom_path, hashes, query, max_results=1, system=system
+                )
+                if result and is_valid_image_data(result[0].image_data):
+                    return result[:1]
+            except Exception as exc:
+                errors["ScreenScraper"] = str(exc)
+        else:
+            errors["ScreenScraper"] = "hash lookup skipped: developer credentials not configured"
+
+        raise HashLookupError(errors)
 
 
 def crop_image(image: Image.Image, size: tuple[int, int], crop: CropSettings) -> Image.Image:
+    # Square box-art output should contain (not crop) distinctly portrait or
+    # landscape source art. Title-art and near-square sources keep legacy crop.
+    if should_fit_art(image, size):
+        return fit_image_to_canvas(image, size, crop.zoom, crop.x, crop.y)
+
     image = image.convert("RGB")
     target_w, target_h = size
     min_scale = max(target_w / image.width, target_h / image.height)
@@ -794,6 +2123,18 @@ class ThumbnailScraperApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
+        self._context_menu_widget = None
+        self.text_context_menu = tk.Menu(self, tearoff=0)
+        self.text_context_menu.add_command(label="Cut", command=lambda: self._text_context_action("<<Cut>>"))
+        self.text_context_menu.add_command(label="Copy", command=lambda: self._text_context_action("<<Copy>>"))
+        self.text_context_menu.add_command(label="Paste", command=lambda: self._text_context_action("<<Paste>>"))
+        self.text_context_menu.add_separator()
+        self.text_context_menu.add_command(label="Select All", command=self._text_context_select_all)
+        for class_name in ("Entry", "TEntry", "Text"):
+            self.bind_class(class_name, "<Button-3>", self._show_text_context_menu, add="+")
+        self.bind_class("Text", "<Button-2>", self._show_text_context_menu, add="+")
+        for class_name in ("Entry", "TEntry", "Text"):
+            self.bind_class(class_name, "<Control-Button-1>", self._show_text_context_menu, add="+")
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         initial_width = min(1180, max(960, screen_width - 80))
@@ -807,6 +2148,8 @@ class ThumbnailScraperApp(tk.Tk):
         self.providers = Providers(self)
         self.current_result: ProviderResult | None = None
         self.result_options: list[ProviderResult] = []
+        self.sd_scan_unmatched_games: list[dict[str, str]] = []
+        self.active_sd_scan_game: dict[str, str] | None = None
         self.current_source_image: Image.Image | None = None
         self.build_result: ProviderResult | None = None
         self.build_source_image: Image.Image | None = None
@@ -814,19 +2157,51 @@ class ThumbnailScraperApp(tk.Tk):
         self.preview_photo = None
         self.build_preview_photo = None
         self.result_thumbs = []
+        self._gallery_thumb_cache: dict[tuple, ImageTk.PhotoImage] = {}
         self.game_names: list[str] = []
         self.system_game_names: dict[str, list[str]] = {}
         self.game_library = []
         self.known_game_codes: set[str] = set()
         self.suggestion_box: tk.Listbox | None = None
         self.region_listboxes: list[tk.Listbox] = []
+        self._settings_save_after_id = None
+        self._build_preview_after_id = None
+        self._build_preview_generation = 0
+        self._build_preview_worker_running = False
+        self._build_preview_pending = False
+        self._preview_gallery_refresh_after_id = None
+        self._suggestions_refresh_after_id = None
+        self._saved_provider_credentials = None
         self.exceptions: list[ExceptionRule] = []
         self.custom_roms: list[CustomRomItem] = []
+        self.custom_output_layout_var = tk.StringVar(value="Mirrored")
+        self.custom_build_system_var = tk.StringVar(value="All")
         self.custom_preview_photo = None
         self.running = False
+        self.custom_build_running = False
         self.cancel_build_requested = False
         self.loading_custom_crop = False
         self.scan_running = False
+        self.sd_scan_progress_window: OperationProgressWindow | None = None
+        self.custom_art_progress_window: OperationProgressWindow | None = None
+        self.tgdb_test_progress_window: OperationProgressWindow | None = None
+        self.igdb_test_progress_window: OperationProgressWindow | None = None
+        self.ss_test_progress_window: OperationProgressWindow | None = None
+        self.tgdb_test_button: ttk.Button | None = None
+        self.igdb_test_button: ttk.Button | None = None
+        self.ss_test_button: ttk.Button | None = None
+        self.tgdb_key_entry: ttk.Entry | None = None
+        self.tgdb_key_reveal_button: ttk.Button | None = None
+        self.tgdb_key_visible = False
+        self.igdb_secret_entry: ttk.Entry | None = None
+        self.igdb_secret_reveal_button: ttk.Button | None = None
+        self.igdb_secret_visible = False
+        self.ss_dev_pass_entry: ttk.Entry | None = None
+        self.ss_dev_pass_reveal_button: ttk.Button | None = None
+        self.ss_dev_pass_visible = False
+        self.ss_pass_entry: ttk.Entry | None = None
+        self.ss_pass_reveal_button: ttk.Button | None = None
+        self.ss_pass_visible = False
 
         self.build_provider_var = tk.StringVar(value="Libretro")
         self.preview_provider_var = tk.StringVar(value="Libretro")
@@ -841,7 +2216,11 @@ class ThumbnailScraperApp(tk.Tk):
         self.build_output_var = tk.StringVar(value="")
         self.build_progress_var = tk.DoubleVar(value=0.0)
         self.local_pack_var = tk.StringVar()
+        self.local_pack_priority_var = tk.BooleanVar(value=False)
         self.igdb_client_var = tk.StringVar()
+        self.igdb_secret_var = tk.StringVar()
+        # Preserved only to support settings files made before automatic OAuth
+        # support. New installs should supply the Client Secret, not an access token.
         self.igdb_token_var = tk.StringVar()
         self.tgdb_key_var = tk.StringVar()
         self.ss_dev_id_var = tk.StringVar()
@@ -867,7 +2246,36 @@ class ThumbnailScraperApp(tk.Tk):
         self.after(50, self._enable_dark_title_bar)
         self._load_settings()
         self._load_game_names_async()
-        self.after(250, self.build_preview_search)
+
+    def _show_text_context_menu(self, event):
+        widget = event.widget
+        self._context_menu_widget = widget
+        try:
+            if isinstance(widget, (tk.Entry, ttk.Entry)):
+                widget.icursor(f"@{event.x}")
+            elif isinstance(widget, tk.Text):
+                widget.mark_set("insert", f"@{event.x},{event.y}")
+            widget.focus_set()
+            self.text_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.text_context_menu.grab_release()
+        return "break"
+
+    def _text_context_action(self, virtual_event: str):
+        widget = self._context_menu_widget
+        if widget is not None and widget.winfo_exists():
+            widget.event_generate(virtual_event)
+
+    def _text_context_select_all(self):
+        widget = self._context_menu_widget
+        if widget is None or not widget.winfo_exists():
+            return
+        if isinstance(widget, (tk.Entry, ttk.Entry)):
+            widget.selection_range(0, "end")
+            widget.icursor("end")
+        elif isinstance(widget, tk.Text):
+            widget.tag_add("sel", "1.0", "end-1c")
+            widget.mark_set("insert", "end-1c")
 
     def _seed_bundled_cache(self):
         cache_dir = self.base_dir / CACHE_FOLDER_NAME
@@ -927,18 +2335,19 @@ class ThumbnailScraperApp(tk.Tk):
         style.configure("TLabel", background=surface, foreground="#f4f8fc", font=("Segoe UI", 10))
         style.configure("Section.TLabel", background=surface, foreground="#ffffff", font=("Segoe UI", 12, "bold"))
         style.configure("Muted.TLabel", background=surface, foreground="#aebfd2", font=("Segoe UI", 10))
-        style.configure("TButton", background=control, foreground="#f4f8fc", borderwidth=0, focusthickness=0, focuscolor=control, relief="flat", font=("Segoe UI", 10), padding=(10, 6))
+        style.configure("SettingsSaved.TLabel", background=surface, foreground="#65d68a", font=("Segoe UI", 13, "bold"))
+        style.configure("TButton", background=control, foreground="#f4f8fc", borderwidth=0, focusthickness=0, focuscolor=control, relief="flat", font=BUTTON_FONT, padding=BUTTON_PADDING)
         style.map("TButton", background=[("active", "#263a57"), ("pressed", "#1c2b41"), ("focus", control)], foreground=[("disabled", "#718196")], relief=[("pressed", "flat"), ("!pressed", "flat")])
-        style.configure("Accent.TButton", background="#2a5caa", foreground="#ffffff", borderwidth=0, focusthickness=0, focuscolor="#2a5caa", relief="flat", font=("Segoe UI", 10, "bold"), padding=(12, 7))
+        style.configure("Accent.TButton", background="#2a5caa", foreground="#ffffff", borderwidth=0, focusthickness=0, focuscolor="#2a5caa", relief="flat", font=BUTTON_FONT, padding=BUTTON_PADDING)
         style.map("Accent.TButton", background=[("active", "#3269bf"), ("pressed", "#244f94"), ("focus", "#2a5caa")], relief=[("pressed", "flat"), ("!pressed", "flat")])
         style.configure("TNotebook", background=base, borderwidth=0, tabmargins=(0, 0, 18, 0))
         style.configure("TNotebook", bordercolor=edge, lightcolor=edge, darkcolor=edge)
         style.configure("TNotebook.Tab", background=base, foreground="#8fa1b5", borderwidth=1, focusthickness=0, focuscolor=surface, font=("Segoe UI", 10), padding=(14, 8))
         style.configure("TNotebook.Tab", bordercolor=edge, lightcolor=edge, darkcolor=edge)
         style.map("TNotebook.Tab", background=[("selected", surface), ("active", "#101c2d"), ("pressed", "#101c2d"), ("focus", base)], foreground=[("selected", "#ffffff"), ("active", "#c4d0dc")], bordercolor=[("selected", surface), ("active", surface), ("!selected", surface)], lightcolor=[("selected", surface), ("active", surface), ("!selected", surface)], darkcolor=[("selected", surface), ("active", surface), ("!selected", surface)], padding=[("selected", (14, 8)), ("active", (14, 8)), ("pressed", (14, 8))])
-        style.configure("TCombobox", fieldbackground="#101a29", background=control, foreground="#edf4fb", arrowcolor="#dce7f3", selectbackground="#101a29", selectforeground="#edf4fb", bordercolor=edge, lightcolor=edge, darkcolor=edge, insertcolor="#ffffff", borderwidth=0, font=("Segoe UI", 10))
+        style.configure("TCombobox", fieldbackground="#101a29", background=control, foreground="#edf4fb", arrowcolor="#dce7f3", selectbackground="#101a29", selectforeground="#edf4fb", bordercolor=edge, lightcolor=edge, darkcolor=edge, insertcolor="#ffffff", borderwidth=0, font=BUTTON_FONT, padding=BUTTON_PADDING)
         style.map("TCombobox", fieldbackground=[("readonly", "#101a29"), ("!disabled", "#101a29"), ("focus", "#101a29")], foreground=[("readonly", "#edf4fb"), ("!disabled", "#edf4fb"), ("focus", "#ffffff")], selectbackground=[("readonly", "#101a29"), ("focus", "#263e5d")], selectforeground=[("readonly", "#edf4fb"), ("focus", "#ffffff")], background=[("active", "#263a57"), ("pressed", "#1c2b41")], bordercolor=[("focus", edge), ("!focus", edge)])
-        style.configure("TEntry", fieldbackground="#101a29", foreground="#edf4fb", insertcolor="#ffffff", borderwidth=0, bordercolor=edge, lightcolor=edge, darkcolor=edge)
+        style.configure("TEntry", fieldbackground="#101a29", foreground="#edf4fb", insertcolor="#ffffff", borderwidth=0, bordercolor=edge, lightcolor=edge, darkcolor=edge, font=BUTTON_FONT, padding=BUTTON_PADDING)
         style.configure("TCheckbutton", background=surface, foreground="#f4f8fc", font=("Segoe UI", 10), focuscolor=surface)
         style.map("TCheckbutton", background=[("active", surface), ("focus", surface)], foreground=[("active", "#ffffff")])
         style.configure("Treeview", background="#101a29", foreground="#edf4fb", fieldbackground="#101a29", borderwidth=0, font=("Segoe UI", 10), rowheight=28)
@@ -987,19 +2396,8 @@ class ThumbnailScraperApp(tk.Tk):
         self.gallery_canvas.itemconfigure(self.gallery_window, width=max(1, event.width))
         self._sync_gallery_scroll_area()
 
-    def _scroll_gallery(self, event):
-        if self.gallery_ybar.winfo_ismapped():
-            self.gallery_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            return "break"
-        return None
-
-    def _enable_gallery_mousewheel(self, _event=None):
-        self.gallery_canvas.bind_all("<MouseWheel>", self._scroll_gallery)
-
-    def _disable_gallery_mousewheel(self, _event=None):
-        self.gallery_canvas.unbind_all("<MouseWheel>")
-
-    def _build_region_order_control(self, parent):
+    def _build_region_order_control(self, parent, scope: str = "build"):
+        """Build one region-priority control with a tab-specific update policy."""
         frame = ttk.Frame(parent, style="Panel.TFrame")
         frame.pack(anchor="w")
         region_list = tk.Listbox(
@@ -1017,11 +2415,11 @@ class ThumbnailScraperApp(tk.Tk):
             font=("Segoe UI", 9),
         )
         region_list.grid(row=0, column=0, rowspan=3, sticky="nsw")
-        ttk.Button(frame, text="Move Up", command=lambda lb=region_list: self.move_region(lb, -1)).grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=(0, 4))
-        ttk.Button(frame, text="Move Down", command=lambda lb=region_list: self.move_region(lb, 1)).grid(row=1, column=1, sticky="ew", padx=(8, 0))
-        ttk.Button(frame, text="Enable/Disable", command=lambda lb=region_list: self.toggle_region(lb)).grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
-        region_list.bind("<space>", lambda _event, lb=region_list: self.toggle_region(lb))
-        region_list.bind("<Double-Button-1>", lambda _event, lb=region_list: self.toggle_region(lb))
+        ttk.Button(frame, text="Move Up", command=lambda lb=region_list, tab_scope=scope: self.move_region(lb, -1, tab_scope)).grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=(0, 4))
+        ttk.Button(frame, text="Move Down", command=lambda lb=region_list, tab_scope=scope: self.move_region(lb, 1, tab_scope)).grid(row=1, column=1, sticky="ew", padx=(8, 0))
+        ttk.Button(frame, text="Toggle Region", command=lambda lb=region_list, tab_scope=scope: self.toggle_region(lb, tab_scope)).grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
+        region_list.bind("<space>", lambda _event, lb=region_list, tab_scope=scope: self.toggle_region(lb, tab_scope))
+        region_list.bind("<Double-Button-1>", lambda _event, lb=region_list, tab_scope=scope: self.toggle_region(lb, tab_scope))
         self.region_listboxes.append(region_list)
         self.refresh_region_lists()
         return frame
@@ -1035,7 +2433,7 @@ class ThumbnailScraperApp(tk.Tk):
                 text=region,
                 variable=self.rom_region_vars[region],
                 command=self.on_rom_region_change,
-            ).grid(row=index // 2, column=index % 2, sticky="w", padx=(0 if index % 2 == 0 else 18, 0), pady=(0, 3))
+            ).grid(row=index, column=0, sticky="w", pady=(0, 3))
         return frame
 
     def _build_ui(self):
@@ -1057,7 +2455,7 @@ class ThumbnailScraperApp(tk.Tk):
         title_box = ttk.Frame(header, style="TFrame")
         title_box.pack(side="left", fill="x", expand=True)
         ttk.Label(title_box, text=APP_NAME, style="Title.TLabel").pack(anchor="w")
-        ttk.Label(title_box, text="Build DS Style thumbnail artwork from online or local images.", style="Sub.TLabel").pack(anchor="w", pady=(3, 0))
+        ttk.Label(title_box, text="Find, preview, and build DS Style artwork.", style="Sub.TLabel").pack(anchor="w", pady=(3, 0))
         version_box = ttk.Frame(header, style="TFrame")
         version_box.pack(side="right", anchor="n")
         ttk.Label(version_box, text=f"DS Style Thumbnail Scraper v{APP_VERSION}", style="HeaderVersion.TLabel").pack(anchor="e")
@@ -1070,21 +2468,31 @@ class ThumbnailScraperApp(tk.Tk):
         self.preview_tab = ttk.Frame(notebook, style="Panel.TFrame", padding=14)
         self.custom_tab = ttk.Frame(notebook, style="Panel.TFrame", padding=14)
         self.exceptions_tab = ttk.Frame(notebook, style="Panel.TFrame", padding=14)
-        notebook.add(self.build_tab, text="Build Pack")
-        notebook.add(self.preview_tab, text="Search & Preview")
-        notebook.add(self.custom_tab, text="Custom Art")
-        notebook.add(self.exceptions_tab, text="Exceptions")
+        self.settings_tab = ttk.Frame(notebook, style="Panel.TFrame", padding=14)
+        notebook.add(self.build_tab, text="GBA Pack")
+        notebook.add(self.preview_tab, text="Search")
+        notebook.add(self.custom_tab, text="Custom Pack")
+        notebook.add(self.exceptions_tab, text="GBA Exceptions")
+        notebook.add(self.settings_tab, text="Settings")
         notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
         self._build_build_tab()
         self._build_preview_tab()
         self._build_custom_tab()
         self._build_exceptions_tab()
+        self._build_settings_tab()
 
         footer = ttk.Frame(self, style="TFrame", padding=(18, 0, 18, 10))
+        footer.configure(height=34)
         footer.pack(fill="x")
-        self.status_label = ttk.Label(footer, textvariable=self.status_var, style="Sub.TLabel", wraplength=900)
+        footer.pack_propagate(False)
+        # Keep the footer's requested height independent of status message length.
+        self.status_label = ttk.Label(
+            footer,
+            textvariable=self.status_var,
+            style="Sub.TLabel",
+            wraplength=0,
+        )
         self.status_label.pack(side="left", fill="x", expand=True)
-        footer.bind("<Configure>", lambda event: self.status_label.configure(wraplength=max(260, event.width - 36)))
 
     def _set_window_icon(self):
         bundled_dir = Path(getattr(sys, "_MEIPASS", self.base_dir))
@@ -1120,57 +2528,102 @@ class ThumbnailScraperApp(tk.Tk):
             pass
 
     def _build_build_tab(self):
-        left = ttk.Frame(self.build_tab, style="Panel.TFrame")
+        left = ttk.Frame(self.build_tab, style="Panel.TFrame", width=CONTROL_PANEL_WIDTH)
         left.pack(side="left", fill="y", padx=(0, 18))
-        source_options = ttk.Frame(left, style="Panel.TFrame")
-        source_options.pack(side="left", fill="y", padx=(0, 18))
-        region_options = ttk.Frame(left, style="Panel.TFrame")
-        region_options.pack(side="left", fill="y")
+        left.grid_propagate(False)
+        left.columnconfigure(0, weight=1)
+        left.rowconfigure(0, weight=1)
+        self.build_controls_canvas = tk.Canvas(left, bg="#152235", highlightthickness=0, bd=0)
+        self.build_controls_canvas.grid(row=0, column=0, sticky="nsew")
+        self.build_controls_scrollbar = ttk.Scrollbar(left, orient="vertical", command=self.build_controls_canvas.yview)
+        self.build_controls_scrollbar.grid(row=0, column=1, sticky="ns", padx=(5, 2), pady=2)
+        self.build_controls_canvas.configure(yscrollcommand=self.build_controls_scrollbar.set)
+        controls = ttk.Frame(self.build_controls_canvas, style="Panel.TFrame")
+        self.build_controls_window = self.build_controls_canvas.create_window((0, 0), window=controls, anchor="nw")
+        self.build_controls_canvas.bind("<Configure>", self._sync_build_controls_width)
+        controls.bind("<Configure>", self._sync_build_controls_scroll_area)
 
-        ttk.Label(source_options, text="Pack Options", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(source_options, text="Main source").pack(anchor="w", pady=(14, 4))
-        build_provider_combo = ttk.Combobox(source_options, textvariable=self.build_provider_var, values=PROVIDER_VALUES, state="readonly", width=20)
+        ttk.Label(controls, text="Pack Options", style="Section.TLabel").pack(anchor="w")
+        ttk.Label(controls, text="Artwork Source").pack(anchor="w", pady=(12, 4))
+        build_provider_combo = ttk.Combobox(controls, textvariable=self.build_provider_var, values=self.available_artwork_sources(), postcommand=lambda: self.refresh_artwork_source_values(build_provider_combo), state="readonly", width=20)
         build_provider_combo.pack(anchor="w")
         build_provider_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_build_source_change())
-        ttk.Label(source_options, text="Libretro source").pack(anchor="w", pady=(14, 4))
-        source_combo = ttk.Combobox(source_options, textvariable=self.build_libretro_source_var, values=list(LIBRETRO_SOURCE_FOLDERS), state="readonly", width=20)
+        ttk.Label(controls, text="Artwork Type").pack(anchor="w", pady=(12, 4))
+        source_combo = ttk.Combobox(controls, textvariable=self.build_libretro_source_var, values=list(LIBRETRO_SOURCE_FOLDERS), state="readonly", width=20)
         source_combo.pack(anchor="w")
         source_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_build_source_change())
-        ttk.Label(source_options, text="Local pack").pack(anchor="w", pady=(14, 4))
-        ttk.Button(source_options, text="Choose Folder...", command=self.choose_local_pack).pack(anchor="w")
-        self.local_pack_label = ttk.Label(source_options, text="No local pack selected", style="Muted.TLabel", wraplength=190)
+        ttk.Label(controls, text="Local Pack").pack(anchor="w", pady=(12, 4))
+        ttk.Button(controls, text="Choose Folder…", command=self.choose_local_pack).pack(anchor="w", fill="x")
+        self.local_pack_label = ttk.Label(controls, text="No local pack selected", style="Muted.TLabel", wraplength=210)
         self.local_pack_label.pack(anchor="w", pady=(6, 0))
-        ttk.Label(source_options, text="Thumbnail size").pack(anchor="w", pady=(14, 4))
-        build_size_combo = ttk.Combobox(source_options, textvariable=self.size_var, values=["80x80", "120x80"], state="readonly", width=20)
+        ttk.Label(controls, text="Thumbnail Size").pack(anchor="w", pady=(12, 4))
+        build_size_combo = ttk.Combobox(controls, textvariable=self.size_var, values=["80x80", "120x80"], state="readonly", width=20)
         build_size_combo.pack(anchor="w")
-        build_size_combo.bind("<<ComboboxSelected>>", lambda _event: (self.update_build_preview(), self.update_preview()))
-        ttk.Checkbutton(source_options, text="Build exceptions only", variable=self.exceptions_only_var).pack(anchor="w", pady=(14, 0))
-        self.build_button = ttk.Button(source_options, text="Build Thumbnail Pack", style="Accent.TButton", command=self.build_pack)
-        self.build_button.pack(anchor="w", pady=(22, 0))
-        self.cancel_build_button = ttk.Button(source_options, text="Cancel Building", command=self.cancel_build)
-        self.cancel_build_button.pack(anchor="w", pady=(8, 0))
+        build_size_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_build_size_change())
+        ttk.Checkbutton(
+            controls,
+            text="Build exceptions only",
+            variable=self.exceptions_only_var,
+            command=self.ensure_build_preview_after_interaction,
+        ).pack(anchor="w", pady=(14, 0))
+        self.build_button = ttk.Button(controls, text="Build Pack", style="Accent.TButton", command=self.build_pack)
+        self.build_button.pack(anchor="w", fill="x", pady=(22, 0))
+        self.cancel_build_button = ttk.Button(controls, text="Cancel Build", command=self.cancel_build)
+        self.cancel_build_button.pack(anchor="w", fill="x", pady=(8, 0))
         self.cancel_build_button.pack_forget()
 
-        ttk.Label(region_options, text="Regions", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(region_options, text="Game regions to build").pack(anchor="w", pady=(14, 4))
-        ttk.Label(region_options, text="Choose which game regions your pack should support.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
-        self._build_rom_region_control(region_options)
-        ttk.Label(region_options, text="Artwork priority").pack(anchor="w", pady=(14, 4))
-        ttk.Label(region_options, text="Choose the order artwork is tried in. If the first region is missing, the next available one is used.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
-        self._build_region_order_control(region_options)
+        ttk.Label(controls, text="Regions", style="Section.TLabel").pack(anchor="w", pady=(18, 0))
+        ttk.Label(controls, text="Game Regions").pack(anchor="w", pady=(12, 4))
+        self._build_rom_region_control(controls)
+        ttk.Label(controls, text="Artwork Priority").pack(anchor="w", pady=(12, 4))
+        self._build_region_order_control(controls, scope="build")
 
         middle = ttk.Frame(self.build_tab, style="Panel.TFrame")
         middle.pack(side="left", fill="y", padx=(0, 18))
-        ttk.Label(middle, text="Current Look", style="Section.TLabel").pack(anchor="w")
-        self.build_preview_label = tk.Label(middle, bg="#101a29", fg="#aebfd2", text="Loading preview...", width=42, height=12, font=("Segoe UI", 10))
+        ttk.Label(middle, text="Preview", style="Section.TLabel").pack(anchor="w")
+        self.build_preview_label = tk.Label(
+            middle,
+            bg="#101a29",
+            fg="#aebfd2",
+            text="Preview loads when you\nchange a pack option or\nclick Refresh Preview.",
+            width=42,
+            height=12,
+            font=("Segoe UI", 10),
+        )
         self.build_preview_label.pack(anchor="w", pady=(10, 8))
-        self.build_preview_info = ttk.Label(middle, text="Loading current look...", style="Muted.TLabel")
+        self.build_preview_info = ttk.Label(
+            middle,
+            text="Change an artwork option or click Refresh Preview.",
+            style="Muted.TLabel",
+            wraplength=280,
+        )
         self.build_preview_info.pack(anchor="w")
-        ttk.Label(middle, text="Pack Crop", style="Section.TLabel").pack(anchor="w", pady=(16, 6))
+        self.build_preview_loading = ttk.Progressbar(middle, mode="indeterminate", length=180)
+        self.build_preview_loading.pack(anchor="w", pady=(6, 0))
+        self.build_preview_loading.pack_forget()
+        self._build_preview_spinner_running = False
+        self.build_pack_crop_label = ttk.Label(middle, text="Preview Crop", style="Section.TLabel")
+        self.build_pack_crop_label.pack(anchor="w", pady=(16, 6))
         for label, var, from_, to in (("Zoom", self.build_zoom_var, 1.0, 3.0), ("Move X", self.build_crop_x_var, -100, 100), ("Move Y", self.build_crop_y_var, -100, 100)):
             ttk.Label(middle, text=label).pack(anchor="w")
-            tk.Scale(middle, variable=var, from_=from_, to=to, resolution=0.05 if label == "Zoom" else 1, orient="horizontal", bg="#152235", fg="#edf4fb", troughcolor="#101a29", activebackground="#263a57", highlightthickness=0, command=lambda _v: self.update_build_preview()).pack(fill="x")
-        ttk.Button(middle, text="Refresh Preview", command=self.build_preview_search).pack(anchor="w", pady=(10, 0))
+            tk.Scale(
+                middle,
+                variable=var,
+                from_=from_,
+                to=to,
+                resolution=0.05 if label == "Zoom" else 1,
+                orient="horizontal",
+                bg="#152235",
+                fg="#edf4fb",
+                troughcolor="#101a29",
+                activebackground="#263a57",
+                highlightthickness=0,
+                command=lambda _value: (
+                    self.update_build_preview(),
+                    self.ensure_build_preview_after_interaction(),
+                ),
+            ).pack(fill="x")
+        ttk.Button(middle, text="Refresh Preview", command=self.build_preview_search).pack(anchor="w", fill="x", pady=(10, 0))
 
         right = ttk.Frame(self.build_tab, style="Panel.TFrame")
         right.pack(side="left", fill="both", expand=True)
@@ -1185,14 +2638,36 @@ class ThumbnailScraperApp(tk.Tk):
 
     def _build_preview_tab(self):
         self.preview_tab.columnconfigure(1, weight=1)
-        controls = ttk.Frame(self.preview_tab, style="Panel.TFrame")
-        controls.grid(row=0, column=0, sticky="nsw", padx=(0, 24))
+        self.preview_tab.rowconfigure(0, weight=1)
+        controls_panel = ttk.Frame(self.preview_tab, style="Panel.TFrame", width=CONTROL_PANEL_WIDTH)
+        controls_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        controls_panel.grid_propagate(False)
+        controls_panel.rowconfigure(0, weight=1)
+        controls_panel.columnconfigure(0, weight=1)
+        self.preview_controls_canvas = tk.Canvas(
+            controls_panel, bg="#152235", highlightthickness=0, bd=0,
+        )
+        self.preview_controls_canvas.grid(row=0, column=0, sticky="nsew")
+        self.preview_controls_scrollbar = ttk.Scrollbar(
+            controls_panel, orient="vertical", command=self.preview_controls_canvas.yview,
+        )
+        # Keep a visible gutter between the scroll thumb and the packed controls;
+        # ttk themes can draw the scrollbar close enough to appear over button edges.
+        self.preview_controls_scrollbar.grid(row=0, column=1, sticky="ns", padx=(5, 2), pady=2)
+        self.preview_controls_canvas.configure(yscrollcommand=self.preview_controls_scrollbar.set)
+        controls = ttk.Frame(self.preview_controls_canvas, style="Panel.TFrame")
+        self.preview_controls_window = self.preview_controls_canvas.create_window(
+            (0, 0), window=controls, anchor="nw",
+        )
+        self.preview_controls_canvas.bind("<Configure>", self._sync_preview_controls_width)
+        controls.bind("<Configure>", self._sync_preview_controls_scroll_area)
+        self.preview_controls_frame = controls
         ttk.Label(controls, text="Search", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(controls, text="Source").pack(anchor="w", pady=(10, 4))
-        preview_provider_combo = ttk.Combobox(controls, textvariable=self.preview_provider_var, values=PROVIDER_VALUES, state="readonly", width=24)
+        ttk.Label(controls, text="Artwork Source").pack(anchor="w", pady=(10, 4))
+        preview_provider_combo = ttk.Combobox(controls, textvariable=self.preview_provider_var, values=self.available_artwork_sources(), postcommand=lambda: self.refresh_artwork_source_values(preview_provider_combo), state="readonly", width=24)
         preview_provider_combo.pack(anchor="w")
         preview_provider_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_preview_source_change())
-        ttk.Label(controls, text="System / console").pack(anchor="w", pady=(12, 4))
+        ttk.Label(controls, text="System").pack(anchor="w", pady=(12, 4))
         self.preview_system_combo = ttk.Combobox(
             controls,
             textvariable=self.preview_system_var,
@@ -1202,26 +2677,42 @@ class ThumbnailScraperApp(tk.Tk):
         )
         self.preview_system_combo.pack(anchor="w")
         self.preview_system_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_preview_system_change())
-        ttk.Label(controls, text="Libretro source").pack(anchor="w", pady=(12, 4))
+        ttk.Label(controls, text="Artwork Type").pack(anchor="w", pady=(12, 4))
         preview_source_combo = ttk.Combobox(controls, textvariable=self.preview_libretro_source_var, values=list(LIBRETRO_SOURCE_FOLDERS), state="readonly", width=24)
         preview_source_combo.pack(anchor="w")
         preview_source_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_preview_source_change())
-        ttk.Button(controls, text="Choose Local Pack...", command=self.choose_local_pack).pack(anchor="w", pady=(10, 0))
-        ttk.Label(controls, text="Thumbnail size").pack(anchor="w", pady=(12, 4))
+        ttk.Button(controls, text="Choose Local Pack…", command=self.choose_local_pack).pack(fill="x", pady=(10, 0))
+        ttk.Label(controls, text="Thumbnail Size").pack(anchor="w", pady=(12, 4))
         size_combo = ttk.Combobox(controls, textvariable=self.size_var, values=["80x80", "120x80"], state="readonly", width=24)
         size_combo.pack(anchor="w")
         size_combo.bind("<<ComboboxSelected>>", lambda _event: self.update_preview())
-        ttk.Label(controls, text="Artwork priority").pack(anchor="w", pady=(12, 4))
-        ttk.Label(controls, text="Choose the order artwork appears in preview results.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
-        self._build_region_order_control(controls)
+        ttk.Label(controls, text="Artwork Priority").pack(anchor="w", pady=(12, 4))
+        self._build_region_order_control(controls, scope="preview")
         ttk.Label(controls, text="Game").pack(anchor="w", pady=(12, 4))
-        self.search_entry = ttk.Entry(controls, textvariable=self.search_var, width=34)
-        self.search_entry.pack(anchor="w", pady=(10, 4))
+        self.search_entry = ttk.Entry(controls, textvariable=self.search_var, width=30)
+        self.search_entry.pack(fill="x", pady=(4, 4))
         self.search_entry.bind("<KeyRelease>", self.update_suggestions)
+        ttk.Label(controls, text="Games Without Artwork Matches").pack(anchor="w", pady=(10, 4))
+        self.sd_scan_game_var = tk.StringVar(value="")
+        self.sd_scan_game_combo = ttk.Combobox(
+            controls, textvariable=self.sd_scan_game_var, state="readonly", width=30,
+        )
+        self.sd_scan_game_combo.pack(fill="x")
+        self.sd_scan_game_combo.bind("<<ComboboxSelected>>", self.choose_sd_scan_game)
+        self.import_sd_scan_report_button = ttk.Button(
+            controls, text="Import Scan Report…", command=self.import_sd_scan_report,
+        )
+        self.import_sd_scan_report_button.pack(fill="x", pady=(4, 0))
+        self.clear_sd_scan_games_button = ttk.Button(
+            controls, text="Clear Unmatched Games", command=self.clear_sd_scan_games,
+        )
+        self.clear_sd_scan_games_button.pack(fill="x", pady=(4, 0))
+        self.clear_sd_scan_games_button.configure(state="disabled")
+        self.search_entry.bind("<KeyPress>", self.clear_active_sd_scan_game, add="+")
         self.suggestion_box = tk.Listbox(
             controls,
             height=6,
-            width=40,
+            width=30,
             bg="#101a29",
             fg="#edf4fb",
             selectbackground="#263e5d",
@@ -1232,18 +2723,18 @@ class ThumbnailScraperApp(tk.Tk):
         )
         self.suggestion_box.bind("<<ListboxSelect>>", self.choose_suggestion)
         self.suggestion_box.bind("<Return>", self.choose_suggestion)
-        self.search_button = ttk.Button(controls, text="Fetch Preview", style="Accent.TButton", command=self.preview_search)
-        self.search_button.pack(anchor="w")
+        self.search_button = ttk.Button(controls, text="Search Artwork", style="Accent.TButton", command=self.preview_search)
+        self.search_button.pack(fill="x")
         ttk.Label(controls, text="Artwork").pack(anchor="w", pady=(12, 4))
-        ttk.Button(controls, text="Use Local Image...", command=self.choose_preview_local).pack(anchor="w", pady=(8, 0))
-        self.add_to_custom_button = ttk.Button(controls, text="Add To Custom Art", command=self.add_preview_to_custom)
-        self.add_to_custom_button.pack(anchor="w", pady=(8, 0))
-        self.add_exception_button = ttk.Button(controls, text="Add As GBA Exception", command=self.add_exception)
-        self.add_exception_button.pack(anchor="w", pady=(8, 0))
+        ttk.Button(controls, text="Use Local Image…", command=self.choose_preview_local).pack(fill="x", pady=(4, 0))
+        self.add_to_custom_button = ttk.Button(controls, text="Add to Custom Pack", command=self.add_preview_to_custom)
+        self.add_to_custom_button.pack(fill="x", pady=(4, 0))
+        self.add_exception_button = ttk.Button(controls, text="Add GBA Exception", command=self.add_exception)
+        self.add_exception_button.pack(fill="x", pady=(4, 0))
 
         preview = ttk.Frame(self.preview_tab, style="Panel.TFrame")
-        preview.grid(row=0, column=1, sticky="nsew", padx=(0, 20))
-        ttk.Label(preview, text="Thumbnail Preview", style="Section.TLabel").pack(anchor="w")
+        preview.grid(row=0, column=1, sticky="nsew", padx=(0, 12))
+        ttk.Label(preview, text="Preview", style="Section.TLabel").pack(anchor="w")
         self.preview_label = tk.Label(preview, bg="#101a29", width=420, height=300)
         self.preview_label.pack(pady=(12, 0), anchor="nw")
         self.preview_info = ttk.Label(preview, text="", style="Muted.TLabel")
@@ -1260,10 +2751,10 @@ class ThumbnailScraperApp(tk.Tk):
         self.preview_loading = ttk.Progressbar(preview, mode="indeterminate", length=240)
         self.preview_loading.pack(anchor="w", pady=(10, 0))
         self.preview_loading.pack_forget()
-        results = ttk.Frame(self.preview_tab, style="Panel.TFrame", width=360)
+        results = ttk.Frame(self.preview_tab, style="Panel.TFrame", width=320)
         results.grid(row=0, column=2, sticky="nsw")
         results.grid_propagate(False)
-        ttk.Label(results, text="Provider Results", style="Section.TLabel").pack(anchor="w")
+        ttk.Label(results, text="Search Results", style="Section.TLabel").pack(anchor="w")
         gallery_box = tk.Frame(results, bg="#152235", highlightthickness=0, bd=0)
         gallery_box.pack(fill="both", expand=True, anchor="w", pady=(12, 0))
         gallery_box.rowconfigure(0, weight=1)
@@ -1278,19 +2769,74 @@ class ThumbnailScraperApp(tk.Tk):
         self.gallery_ybar.grid_remove()
         self.gallery_frame.bind("<Configure>", self._sync_gallery_scroll_area)
         self.gallery_canvas.bind("<Configure>", self._sync_gallery_canvas_width)
-        self.gallery_canvas.bind("<Enter>", self._enable_gallery_mousewheel)
-        self.gallery_canvas.bind("<Leave>", self._disable_gallery_mousewheel)
+        self.bind_all("<Button-4>", self._scroll_preview_controls, add="+")
+        self.bind_all("<Button-5>", self._scroll_preview_controls, add="+")
+        self.bind_all("<MouseWheel>", self._scroll_preview_controls, add="+")
+
+    def _sync_preview_controls_width(self, event):
+        self.preview_controls_canvas.itemconfigure(self.preview_controls_window, width=event.width)
+        self._sync_preview_controls_scroll_area()
+
+    def _sync_build_controls_width(self, event):
+        self.build_controls_canvas.itemconfigure(self.build_controls_window, width=event.width)
+        self._sync_build_controls_scroll_area()
+
+    def _sync_build_controls_scroll_area(self, _event=None):
+        self.build_controls_canvas.configure(scrollregion=self.build_controls_canvas.bbox("all"))
+        self.after_idle(self._update_build_controls_scrollbar)
+
+    def _update_build_controls_scrollbar(self):
+        first, last = self.build_controls_canvas.yview()
+        if first <= 0 and last >= 1:
+            self.build_controls_scrollbar.grid_remove()
+        else:
+            self.build_controls_scrollbar.grid()
+
+    def _sync_preview_controls_scroll_area(self, _event=None):
+        self.preview_controls_canvas.configure(scrollregion=self.preview_controls_canvas.bbox("all"))
+        self.after_idle(self._update_preview_controls_scrollbar)
+
+    def _update_preview_controls_scrollbar(self):
+        first, last = self.preview_controls_canvas.yview()
+        if first <= 0 and last >= 1:
+            self.preview_controls_scrollbar.grid_remove()
+        else:
+            self.preview_controls_scrollbar.grid()
+
+    def _scroll_preview_controls(self, event):
+        try:
+            widget = self.winfo_containing(event.x_root, event.y_root)
+            while widget is not None and widget is not self:
+                if widget in (self.preview_controls_canvas, self.build_controls_canvas, self.gallery_canvas):
+                    canvas = widget
+                    if canvas is self.gallery_canvas and not self.gallery_ybar.winfo_ismapped():
+                        return None
+                    if getattr(event, "num", None) == 4:
+                        delta = -1
+                    elif getattr(event, "num", None) == 5:
+                        delta = 1
+                    else:
+                        delta = -int(event.delta / 120) or (-1 if event.delta > 0 else 1)
+                    canvas.yview_scroll(delta, "units")
+                    return "break"
+                parent = widget.winfo_parent()
+                widget = self.nametowidget(parent) if parent else None
+        except (tk.TclError, KeyError):
+            pass
+        return None
 
     def _build_custom_tab(self):
         self.custom_tab.columnconfigure(0, weight=1)
         self.custom_tab.rowconfigure(2, weight=1)
-        ttk.Label(self.custom_tab, text="Custom Thumbnail Overrides", style="Section.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(
+        ttk.Label(self.custom_tab, text="Artwork Entries", style="Section.TLabel").grid(row=0, column=0, sticky="w")
+        self.custom_description_label = ttk.Label(
             self.custom_tab,
-            text="Add artwork for any supported game file or folder. Scan an SD card to match installed games automatically; ROM files are never edited.",
+            text="Add artwork for games found on your SD card. 'Mirrored' preserves full game library paths; 'Custom' uses a single folder with a 255 total file limit.",
             style="Muted.TLabel",
-            wraplength=760,
-        ).grid(row=1, column=0, sticky="w", pady=(8, 14))
+            wraplength=1000,
+        )
+        self.custom_description_label.grid(row=1, column=0, sticky="w", pady=(8, 14))
+        self.custom_tab.bind("<Configure>", self._sync_custom_description_wrap, add="+")
 
         body = ttk.Frame(self.custom_tab, style="Panel.TFrame")
         body.grid(row=2, column=0, sticky="nsew")
@@ -1304,7 +2850,7 @@ class ThumbnailScraperApp(tk.Tk):
         list_area.rowconfigure(0, weight=1)
         list_area.columnconfigure(0, weight=1)
         self.custom_tree = ttk.Treeview(list_area, columns=("name", "source", "size", "image"), show="headings", height=11, selectmode="extended")
-        for column, text, width in (("name", "Thumbnail name", 230), ("source", "System", 120), ("size", "Size", 76), ("image", "Image", 170)):
+        for column, text, width in (("name", "Artwork name", 230), ("source", "System", 120), ("size", "Size", 76), ("image", "Image", 170)):
             self.custom_tree.heading(column, text=text)
             self.custom_tree.column(column, width=width, stretch=True)
         custom_ybar = ttk.Scrollbar(list_area, orient="vertical", command=self.custom_tree.yview)
@@ -1323,31 +2869,46 @@ class ThumbnailScraperApp(tk.Tk):
 
         actions = ttk.Frame(body, style="Panel.TFrame")
         actions.grid(row=0, column=1, sticky="n", padx=(0, 24))
-        self.scan_sd_button = ttk.Button(actions, text="Scan SD Card...", style="Accent.TButton", command=self.scan_sd_card)
+        self.scan_sd_button = ttk.Button(actions, text="Scan SD Card…", style="Accent.TButton", command=self.scan_sd_card)
         self.scan_sd_button.pack(anchor="w", fill="x", pady=(0, 12))
-        ttk.Button(actions, text="Add File...", command=self.add_custom_roms).pack(anchor="w", fill="x", pady=(0, 8))
-        ttk.Button(actions, text="Enter Name...", command=self.add_custom_name).pack(anchor="w", fill="x", pady=(0, 8))
-        ttk.Button(actions, text="Set Image...", command=self.set_custom_image).pack(anchor="w", fill="x", pady=(0, 8))
-        ttk.Button(actions, text="Remove Selected", command=self.remove_custom_roms).pack(anchor="w", fill="x", pady=(0, 16))
-        ttk.Label(actions, text="Thumbnail size").pack(anchor="w")
+        ttk.Button(actions, text="Add ROMs…", command=self.add_custom_roms).pack(anchor="w", fill="x", pady=(0, 8))
+        ttk.Button(actions, text="Add Name…", command=self.add_custom_name).pack(anchor="w", fill="x", pady=(0, 8))
+        ttk.Button(actions, text="Set Image…", command=self.set_custom_image).pack(anchor="w", fill="x", pady=(0, 8))
+        ttk.Button(actions, text="Remove Selected", command=self.remove_custom_roms).pack(anchor="w", fill="x", pady=(0, 8))
+        ttk.Button(actions, text="Clear All", command=self.clear_all_custom_roms).pack(anchor="w", fill="x", pady=(0, 16))
+        ttk.Label(actions, text="Thumbnail Size").pack(anchor="w")
         custom_size_combo = ttk.Combobox(actions, textvariable=self.size_var, values=["80x80", "120x80"], state="readonly", width=18)
         custom_size_combo.pack(anchor="w", fill="x", pady=(4, 12))
         custom_size_combo.bind("<<ComboboxSelected>>", lambda _event: self.apply_custom_size_to_selection())
-        ttk.Label(actions, text="Selected name").pack(anchor="w")
+        ttk.Label(actions, text="Name (Custom)").pack(anchor="w")
         self.custom_code_var = tk.StringVar()
         ttk.Entry(actions, textvariable=self.custom_code_var, width=22).pack(anchor="w", fill="x", pady=(4, 8))
-        ttk.Label(actions, text="Must exactly match the filename without its extension, or the folder name.", style="Muted.TLabel", wraplength=170).pack(anchor="w", pady=(0, 4))
-        ttk.Label(actions, text="Up to 256 images can be used in each CUSTOM folder.", style="Muted.TLabel", wraplength=170).pack(anchor="w", pady=(0, 8))
+        ttk.Label(actions, text="Output Layout").pack(anchor="w")
+        custom_layout_combo = ttk.Combobox(
+            actions,
+            textvariable=self.custom_output_layout_var,
+            values=["Mirrored", "Custom"],
+            state="readonly",
+            width=18,
+        )
+        custom_layout_combo.pack(anchor="w", fill="x", pady=(4, 5))
+        custom_layout_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_custom_output_layout_changed())
+        ttk.Label(
+            actions,
+            text="Mirrored artwork follows game library paths. Custom artwork uses one folder and supports up to 255 files.",
+            style="Muted.TLabel",
+            wraplength=170,
+        ).pack(anchor="w", pady=(0, 8))
         ttk.Button(actions, text="Apply Name", command=self.apply_custom_code).pack(anchor="w", fill="x", pady=(0, 16))
 
         right = ttk.Frame(body, style="Panel.TFrame")
         right.grid(row=0, column=2, sticky="nw")
         right.columnconfigure(0, weight=1)
-        ttk.Label(right, text="Selected Preview", style="Section.TLabel").pack(anchor="w")
+        ttk.Label(right, text="Entry Preview", style="Section.TLabel").pack(anchor="w")
         self.custom_preview_label = tk.Label(right, bg="#101a29", width=300, height=210)
         self.custom_preview_label.pack_propagate(False)
         self.custom_preview_label.pack(anchor="w", pady=(8, 6))
-        self.custom_preview_info = ttk.Label(right, text="Choose a file or name and image", style="Muted.TLabel", wraplength=340)
+        self.custom_preview_info = ttk.Label(right, text="Select an entry to preview its image.", style="Muted.TLabel", wraplength=340)
         self.custom_preview_info.pack(anchor="w")
         crop_row = ttk.Frame(right, style="Panel.TFrame")
         crop_row.pack(anchor="w", pady=(12, 0))
@@ -1359,12 +2920,25 @@ class ThumbnailScraperApp(tk.Tk):
 
         custom_footer = ttk.Frame(self.custom_tab, style="Panel.TFrame")
         custom_footer.grid(row=3, column=0, sticky="ew", pady=(12, 0))
-        ttk.Button(
+        self.build_custom_art_button = ttk.Button(
             custom_footer,
-            text="Build Custom Art",
+            text="Build Pack",
             style="Accent.TButton",
             command=self.build_custom_rom_output,
-        ).pack(side="left")
+        )
+        self.build_custom_art_button.pack(side="left")
+        ttk.Label(custom_footer, text="For").pack(side="left", padx=(8, 6))
+        self.custom_build_system_combo = ttk.Combobox(
+            custom_footer,
+            textvariable=self.custom_build_system_var,
+            values=["All"],
+            state="readonly",
+            width=20,
+        )
+        self.custom_build_system_combo.pack(side="left")
+
+    def _sync_custom_description_wrap(self, event):
+        self.custom_description_label.configure(wraplength=max(120, event.width - 40))
 
     def _build_exceptions_tab(self):
         ttk.Label(self.exceptions_tab, text="Per-game Exceptions", style="Section.TLabel").pack(anchor="w")
@@ -1383,36 +2957,284 @@ class ThumbnailScraperApp(tk.Tk):
         exception_ybar.grid_remove()
         self._sync_tree_columns(self.exception_tree, {"title": 0.34, "size": 0.10, "provider": 0.16, "label": 0.40})
         self.exception_scroll_sync = self._sync_tree_scrollbar(self.exception_tree, exception_ybar)
-        ttk.Button(self.exceptions_tab, text="Remove Selected", command=self.remove_exception).pack(anchor="w")
+        ttk.Button(self.exceptions_tab, text="Remove Selected", command=self.remove_exception).pack(anchor="w", fill="x")
 
     def _build_settings_tab(self):
-        ttk.Label(self.settings_tab, text="Provider Credentials", style="Section.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(self.settings_tab, text="Provider Credentials", style="Section.TLabel").grid(
+            row=0, column=0, columnspan=3, sticky="w"
+        )
         fields = [
             ("Local pack folder", self.local_pack_var, "folder", False),
             ("IGDB Client ID", self.igdb_client_var, None, False),
-            ("IGDB access token", self.igdb_token_var, None, False),
-            ("TheGamesDB API key", self.tgdb_key_var, None, False),
-            ("ScreenScraper developer ID", self.ss_dev_id_var, None, False),
-            ("ScreenScraper developer password", self.ss_dev_pass_var, None, True),
-            ("ScreenScraper username", self.ss_user_var, None, False),
-            ("ScreenScraper password", self.ss_pass_var, None, True),
+            ("IGDB Client Secret", self.igdb_secret_var, "igdb_secret", True),
+            ("TheGamesDB API key", self.tgdb_key_var, "thegamesdb", True),
+            ("ScreenScraper developer ID", self.ss_dev_id_var, "screenscraper", False),
+            ("ScreenScraper developer password", self.ss_dev_pass_var, "ss_dev_pass", True),
+            ("ScreenScraper username (optional)", self.ss_user_var, None, False),
+            ("ScreenScraper password (optional)", self.ss_pass_var, "ss_pass", True),
         ]
-        for row, (label, var, action, hidden) in enumerate(fields, start=1):
+        for field_index, (label, var, action, hidden) in enumerate(fields):
+            row = field_index + 1 + (1 if field_index else 0)
             ttk.Label(self.settings_tab, text=label).grid(row=row, column=0, sticky="w", pady=6)
-            ttk.Entry(self.settings_tab, textvariable=var, width=54, show="*" if hidden else "").grid(row=row, column=1, sticky="w", padx=(10, 8))
             if action == "folder":
-                ttk.Button(self.settings_tab, text="Browse", command=self.choose_local_pack).grid(row=row, column=2, sticky="w")
+                ttk.Entry(self.settings_tab, textvariable=var, width=54).grid(
+                    row=row, column=1, sticky="w", padx=(10, 8)
+                )
+                ttk.Button(self.settings_tab, text="Browse", command=self.choose_local_pack).grid(
+                    row=row, column=2, sticky="w"
+                )
+                ttk.Checkbutton(
+                    self.settings_tab,
+                    text="Prefer local-pack matches over cached or online artwork",
+                    variable=self.local_pack_priority_var,
+                    command=self.save_settings,
+                ).grid(row=row + 1, column=1, columnspan=2, sticky="w", padx=(10, 8), pady=(0, 6))
+            elif action in {"thegamesdb", "igdb_secret", "ss_dev_pass", "ss_pass"}:
+                controls = ttk.Frame(self.settings_tab, style="Panel.TFrame")
+                controls.grid(row=row, column=1, sticky="w", padx=(10, 8))
+                entry = ttk.Entry(controls, textvariable=var, width=38, show="*" if hidden else "")
+                entry.pack(side="left")
+                reveal = ttk.Button(controls, text="Show", width=7)
+                reveal.pack(side="left", padx=(6, 0))
+                if action == "thegamesdb":
+                    self.tgdb_key_entry = entry
+                    self.tgdb_key_reveal_button = reveal
+                    reveal.configure(command=self.toggle_tgdb_key_visibility)
+                    self.tgdb_test_button = ttk.Button(
+                        self.settings_tab, text="Test Key", command=self.test_thegamesdb_key
+                    )
+                    self.tgdb_test_button.grid(row=row, column=2, sticky="w")
+                elif action == "igdb_secret":
+                    self.igdb_secret_entry = entry
+                    self.igdb_secret_reveal_button = reveal
+                    reveal.configure(command=self.toggle_igdb_secret_visibility)
+                    self.igdb_test_button = ttk.Button(
+                        self.settings_tab, text="Test Credentials", command=self.test_igdb_credentials_gui
+                    )
+                    self.igdb_test_button.grid(row=row, column=2, sticky="w")
+                elif action == "ss_dev_pass":
+                    self.ss_dev_pass_entry = entry
+                    self.ss_dev_pass_reveal_button = reveal
+                    reveal.configure(command=self.toggle_ss_dev_pass_visibility)
+                else:
+                    self.ss_pass_entry = entry
+                    self.ss_pass_reveal_button = reveal
+                    reveal.configure(command=self.toggle_ss_pass_visibility)
+            else:
+                ttk.Entry(self.settings_tab, textvariable=var, width=54, show="*" if hidden else "").grid(
+                    row=row, column=1, sticky="w", padx=(10, 8)
+                )
+                if action == "screenscraper":
+                    self.ss_test_button = ttk.Button(
+                        self.settings_tab, text="Test Credentials", command=self.test_screenscraper_credentials_gui
+                    )
+                    self.ss_test_button.grid(row=row, column=2, sticky="w")
+
+        help_row = len(fields) + 2
         ttk.Label(
             self.settings_tab,
-            text="ScreenScraper is an advanced provider and requires developer credentials from ScreenScraper as well as a user account.",
+            text=(
+                "Fallback order: Libretro → TheGamesDB → ScreenScraper → IGDB. "
+                "IGDB uses your Twitch Client ID and Secret; the app handles access tokens. "
+                "ScreenScraper requires developer credentials. Account username and password are optional, but must be entered together. "
+                "Providers without valid credentials or a matching system are skipped."
+            ),
             style="Muted.TLabel",
-            wraplength=620,
-        ).grid(row=len(fields) + 1, column=1, sticky="w", pady=(8, 0), padx=(10, 8))
-        ttk.Button(self.settings_tab, text="Save Settings", style="Accent.TButton", command=self.save_settings).grid(row=len(fields) + 2, column=1, sticky="w", pady=(16, 0))
+            wraplength=700,
+        ).grid(row=help_row, column=1, columnspan=2, sticky="w", pady=(8, 0), padx=(10, 8))
+        actions = ttk.Frame(self.settings_tab, style="Panel.TFrame")
+        actions.grid(row=help_row + 1, column=1, columnspan=2, sticky="w", pady=(16, 0), padx=(10, 8))
+        ttk.Button(
+            actions,
+            text="Get TheGamesDB API key",
+            command=lambda: webbrowser.open("https://thegamesdb.net/?tab=api"),
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            actions,
+            text="Get IGDB credentials",
+            command=lambda: webbrowser.open("https://dev.twitch.tv/console/apps"),
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            actions,
+            text="ScreenScraper API access",
+            command=lambda: webbrowser.open("https://www.screenscraper.fr/webapi2.php"),
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            actions,
+            text="Save Settings",
+            style="Accent.TButton",
+            command=self.save_settings_from_button,
+        ).pack(side="left")
+        self.settings_saved_indicator = ttk.Label(actions, text="", style="SettingsSaved.TLabel")
+        self.settings_saved_indicator.pack(side="left", padx=(8, 0))
+
+    def save_settings_from_button(self):
+        self.settings_saved_indicator.configure(text="")
+        try:
+            self.save_settings()
+        except (OSError, TypeError, ValueError) as exc:
+            self.status_var.set(f"Could not save settings: {exc}")
+            return
+        self.settings_saved_indicator.configure(text="✓")
+
+    def toggle_tgdb_key_visibility(self):
+        if not self.tgdb_key_entry or not self.tgdb_key_reveal_button:
+            return
+        self.tgdb_key_visible = not self.tgdb_key_visible
+        self.tgdb_key_entry.configure(show="" if self.tgdb_key_visible else "*")
+        self.tgdb_key_reveal_button.configure(text="Hide" if self.tgdb_key_visible else "Show")
+
+    def toggle_igdb_secret_visibility(self):
+        if not self.igdb_secret_entry or not self.igdb_secret_reveal_button:
+            return
+        self.igdb_secret_visible = not self.igdb_secret_visible
+        self.igdb_secret_entry.configure(show="" if self.igdb_secret_visible else "*")
+        self.igdb_secret_reveal_button.configure(text="Hide" if self.igdb_secret_visible else "Show")
+
+    def toggle_ss_dev_pass_visibility(self):
+        if not self.ss_dev_pass_entry or not self.ss_dev_pass_reveal_button:
+            return
+        self.ss_dev_pass_visible = not self.ss_dev_pass_visible
+        self.ss_dev_pass_entry.configure(show="" if self.ss_dev_pass_visible else "*")
+        self.ss_dev_pass_reveal_button.configure(text="Hide" if self.ss_dev_pass_visible else "Show")
+
+    def toggle_ss_pass_visibility(self):
+        if not self.ss_pass_entry or not self.ss_pass_reveal_button:
+            return
+        self.ss_pass_visible = not self.ss_pass_visible
+        self.ss_pass_entry.configure(show="" if self.ss_pass_visible else "*")
+        self.ss_pass_reveal_button.configure(text="Hide" if self.ss_pass_visible else "Show")
+
+    def test_thegamesdb_key(self):
+        if self.tgdb_test_progress_window is not None:
+            return
+        api_key = self.tgdb_key_var.get().strip()
+        if not api_key:
+            messagebox.showinfo(APP_NAME, "Enter your TheGamesDB API key first.")
+            return
+        try:
+            self.save_settings()
+        except OSError as exc:
+            messagebox.showwarning(APP_NAME, f"Could not save settings before testing the key:\n{exc}")
+            return
+        self.tgdb_test_button.configure(state="disabled")
+        self.tgdb_test_progress_window = OperationProgressWindow(
+            self, "Test TheGamesDB API Key", "Contacting TheGamesDB to verify the key…"
+        )
+
+        def worker():
+            try:
+                platform_count = self.providers.test_thegamesdb_api_key(api_key)
+                self.after(0, lambda count=platform_count: self.finish_thegamesdb_key_test(count, None))
+            except Exception as exc:
+                self.after(0, lambda error=exc: self.finish_thegamesdb_key_test(0, error))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_thegamesdb_key_test(self, platform_count: int, error: Exception | None):
+        self.close_operation_progress("tgdb_test_progress_window")
+        if self.tgdb_test_button:
+            self.tgdb_test_button.configure(state="normal")
+        if error is None:
+            self.status_var.set("TheGamesDB API key verified.")
+            messagebox.showinfo(APP_NAME, f"TheGamesDB API key works. Retrieved {platform_count} platforms.")
+        else:
+            self.status_var.set("TheGamesDB API key test failed.")
+            messagebox.showwarning(APP_NAME, f"Could not verify TheGamesDB API key:\n{error}")
+
+    def test_igdb_credentials_gui(self):
+        if self.igdb_test_progress_window is not None:
+            return
+        if not self.igdb_client_var.get().strip() or not self.igdb_secret_var.get().strip():
+            messagebox.showinfo(APP_NAME, "Enter your IGDB/Twitch Client ID and Client Secret first.")
+            return
+        self._start_provider_credential_test(
+            "IGDB",
+            "igdb_test_progress_window",
+            self.igdb_test_button,
+            self.providers.test_igdb_credentials,
+        )
+
+    def test_screenscraper_credentials_gui(self):
+        if self.ss_test_progress_window is not None:
+            return
+        if not self.ss_dev_id_var.get().strip() or not self.ss_dev_pass_var.get().strip():
+            messagebox.showinfo(APP_NAME, "Enter your ScreenScraper developer ID and developer password first.")
+            return
+        self._start_provider_credential_test(
+            "ScreenScraper",
+            "ss_test_progress_window",
+            self.ss_test_button,
+            self.providers.test_screenscraper_credentials,
+        )
+
+    def _start_provider_credential_test(self, provider_name, window_attribute, button, test_call):
+        try:
+            self.save_settings()
+        except OSError as exc:
+            messagebox.showwarning(APP_NAME, f"Could not save settings before testing {provider_name}:\n{exc}")
+            return
+        if button is not None:
+            button.configure(state="disabled")
+        setattr(
+            self,
+            window_attribute,
+            OperationProgressWindow(self, f"Test {provider_name} Credentials", f"Contacting {provider_name}…"),
+        )
+
+        def worker():
+            try:
+                count = test_call()
+                self.after(0, lambda count=count: self.finish_provider_credential_test(
+                    provider_name, window_attribute, button, count, None
+                ))
+            except Exception as exc:
+                self.after(0, lambda error=exc: self.finish_provider_credential_test(
+                    provider_name, window_attribute, button, 0, error
+                ))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_provider_credential_test(self, provider_name, window_attribute, button, count: int, error: Exception | None):
+        self.close_operation_progress(window_attribute)
+        if button is not None:
+            button.configure(state="normal")
+        if error is None:
+            self.status_var.set(f"{provider_name} credentials verified.")
+            messagebox.showinfo(APP_NAME, f"{provider_name} credentials work. Retrieved {count} platform/system records.")
+        else:
+            self.status_var.set(f"{provider_name} credential test failed.")
+            messagebox.showwarning(APP_NAME, f"Could not verify {provider_name} credentials:\n{error}")
 
     def log(self, text: str):
         self.status_var.set(text)
         self.update_idletasks()
+
+    def queue_operation_progress(
+        self,
+        window_attribute: str,
+        heading: str,
+        current: int | None = None,
+        total: int | None = None,
+        detail: str = "",
+    ):
+        """Queue progress updates from worker threads onto Tk's main thread."""
+        def update():
+            window = getattr(self, window_attribute, None)
+            if window is not None:
+                window.update_progress(heading, current, total, detail)
+            self.status_var.set(f"{heading} — {detail}" if detail else heading)
+
+        try:
+            self.after(0, update)
+        except tk.TclError:
+            pass
+
+    def close_operation_progress(self, window_attribute: str):
+        window = getattr(self, window_attribute, None)
+        if window is not None:
+            window.close()
+            setattr(self, window_attribute, None)
 
     def set_build_progress(self, value: float | None = None, text: str | None = None, output: str | None = None):
         def update():
@@ -1449,7 +3271,7 @@ class ThumbnailScraperApp(tk.Tk):
             if selected:
                 region_list.selection_set(min(selected[0], len(self.region_order) - 1))
 
-    def move_region(self, region_list: tk.Listbox, direction: int):
+    def move_region(self, region_list: tk.Listbox, direction: int, scope: str = "build"):
         selection = region_list.curselection()
         if not selection:
             return
@@ -1462,10 +3284,10 @@ class ThumbnailScraperApp(tk.Tk):
         for listbox in self.region_listboxes:
             listbox.selection_clear(0, "end")
             listbox.selection_set(new_index)
-        self.save_settings()
-        self.on_region_change()
+        self._schedule_settings_save()
+        self.on_region_change(scope=scope, update_suggestions=False)
 
-    def toggle_region(self, region_list: tk.Listbox):
+    def toggle_region(self, region_list: tk.Listbox, scope: str = "build"):
         selection = region_list.curselection()
         if not selection:
             return "break"
@@ -1476,8 +3298,8 @@ class ThumbnailScraperApp(tk.Tk):
         for listbox in self.region_listboxes:
             listbox.selection_clear(0, "end")
             listbox.selection_set(index)
-        self.save_settings()
-        self.on_region_change()
+        self._schedule_settings_save()
+        self.on_region_change(scope=scope, update_suggestions=True)
         return "break"
 
     def selected_regions(self) -> set[str]:
@@ -1513,18 +3335,106 @@ class ThumbnailScraperApp(tk.Tk):
             queries.extend(BUILD_PREVIEW_SAMPLES[region])
         return list(dict.fromkeys(queries or [DEFAULT_SEARCH]))
 
-    def on_region_change(self):
-        self.hide_suggestions()
-        self.build_preview_search()
-        if self.search_var.get().strip():
-            self.preview_search()
+    def on_region_change(self, scope: str = "build", update_suggestions: bool = False):
+        """React locally to region edits; do not fire provider requests from both tabs."""
+        if scope == "preview":
+            if update_suggestions:
+                self.hide_suggestions()
+                self._schedule_suggestion_refresh()
+            if self.result_options:
+                self._schedule_preview_gallery_refresh()
+            else:
+                self.status_var.set("Artwork priority updated. Search again to see results in this order.")
+            return
+        self._schedule_build_preview_search(delay=650)
 
     def on_rom_region_change(self):
-        self.save_settings()
+        # Saving serializes all custom-art entries; debounce rapid checkbox edits so
+        # the UI does not repeatedly rewrite a potentially large settings file.
+        self._schedule_settings_save()
+        self.ensure_build_preview_after_interaction()
+
+    def on_build_size_change(self):
+        self.update_build_preview()
+        self.update_preview()
+        self.ensure_build_preview_after_interaction()
+
+    def ensure_build_preview_after_interaction(self):
+        """Load the initial GBA preview after the user first changes a pack control."""
+        if not hasattr(self, "build_preview_label") or self.build_source_image is not None:
+            return
+        if getattr(self, "_build_preview_worker_running", False):
+            return
+        if getattr(self, "_build_preview_after_id", None) is None:
+            self.build_preview_search()
+
+    def _schedule_settings_save(self, delay: int = 550):
+        pending = getattr(self, "_settings_save_after_id", None)
+        if pending is not None:
+            try:
+                self.after_cancel(pending)
+            except tk.TclError:
+                pass
+        self.status_var.set("Saving region settings…")
+        self._settings_save_after_id = self.after(delay, self._run_scheduled_settings_save)
+
+    def _run_scheduled_settings_save(self):
+        self._settings_save_after_id = None
+        try:
+            self.save_settings()
+        except OSError as exc:
+            self.status_var.set(f"Could not save settings: {exc}")
+
+    def _schedule_preview_gallery_refresh(self, delay: int = 220):
+        """Coalesce local gallery resorting while the user changes priority quickly."""
+        pending = getattr(self, "_preview_gallery_refresh_after_id", None)
+        if pending is not None:
+            try:
+                self.after_cancel(pending)
+            except tk.TclError:
+                pass
+        self.status_var.set("Reordering preview results by artwork priority…")
+        self.set_preview_loading(True)
+        self._preview_gallery_refresh_after_id = self.after(delay, self._finish_preview_gallery_refresh)
+
+    def _finish_preview_gallery_refresh(self):
+        self._preview_gallery_refresh_after_id = None
+        try:
+            if self.result_options:
+                self.refresh_result_gallery()
+            else:
+                self.status_var.set("Artwork priority updated.")
+        finally:
+            self.set_preview_loading(False)
+
+    def _schedule_suggestion_refresh(self, delay: int = 180):
+        """Debounce local autocomplete filtering while region toggles are changing."""
+        pending = getattr(self, "_suggestions_refresh_after_id", None)
+        if pending is not None:
+            try:
+                self.after_cancel(pending)
+            except tk.TclError:
+                pass
+        self._suggestions_refresh_after_id = self.after(delay, self._finish_suggestion_refresh)
+
+    def _finish_suggestion_refresh(self):
+        self._suggestions_refresh_after_id = None
+        self.update_suggestions()
 
     def on_build_source_change(self):
         self.save_settings()
         self.build_preview_search()
+
+    def available_artwork_sources(self):
+        sources = ["Libretro", "Local Pack"]
+        sources.extend(
+            provider for provider in ("TheGamesDB", "ScreenScraper", "IGDB")
+            if self.providers.provider_is_configured(provider)
+        )
+        return sources
+
+    def refresh_artwork_source_values(self, combo):
+        combo.configure(values=self.available_artwork_sources())
 
     def on_preview_source_change(self):
         self.save_settings()
@@ -1549,7 +3459,7 @@ class ThumbnailScraperApp(tk.Tk):
 
     def on_tab_changed(self, event):
         notebook = event.widget
-        if notebook.tab(notebook.select(), "text") == "Custom Art":
+        if notebook.tab(notebook.select(), "text") == "Custom Pack":
             self.update_custom_preview()
 
     def update_local_pack_label(self):
@@ -1615,7 +3525,7 @@ class ThumbnailScraperApp(tk.Tk):
             self.suggestion_box.insert("end", name)
         if matches:
             if not self.suggestion_box.winfo_ismapped():
-                self.suggestion_box.pack(anchor="w", pady=(0, 8), before=self.search_button)
+                self.suggestion_box.pack(fill="x", pady=(0, 8), before=self.search_button)
         else:
             self.hide_suggestions()
 
@@ -1627,6 +3537,116 @@ class ThumbnailScraperApp(tk.Tk):
             return
         self.search_var.set(self.suggestion_box.get(selection[0]))
         self.hide_suggestions()
+
+    def choose_sd_scan_game(self, event=None):
+        selection = self.sd_scan_game_combo.current()
+        if selection < 0 or selection >= len(self.sd_scan_unmatched_games):
+            return
+        game = self.sd_scan_unmatched_games[selection]
+        self.active_sd_scan_game = game
+        self.search_var.set(Path(game["path"]).stem if game.get("path") else Path(game["title"]).stem)
+        self.preview_system_var.set(game.get("system") or DEFAULT_SYSTEM)
+        self.notebook.select(self.preview_tab)
+        self.status_var.set("Search for artwork for this SD card game, then add the result to Custom Art.")
+
+    def clear_sd_scan_games(self):
+        self.sd_scan_unmatched_games.clear()
+        self.sd_scan_game_combo.configure(values=[])
+        self.sd_scan_game_var.set("")
+        self.active_sd_scan_game = None
+        self.clear_sd_scan_games_button.configure(state="disabled")
+        self.status_var.set("Cleared unmatched SD card games.")
+
+    def clear_active_sd_scan_game(self, event=None):
+        # Return submits the selected queue entry; it must retain its removal context.
+        if event is not None and event.keysym in {"Return", "KP_Enter", "Enter", "Tab", "Up", "Down", "Escape"}:
+            return
+        # Editing the query means the selected queue entry is no longer the search target.
+        self.active_sd_scan_game = None
+
+    def import_sd_scan_report(self):
+        report_name = filedialog.askopenfilename(
+            title="Import SD scan report",
+            filetypes=[("SD scan reports", "*.txt"), ("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not report_name:
+            return
+        report_path = Path(report_name)
+        imported: list[dict[str, str]] = []
+        metadata_path = report_path.with_suffix(".json")
+        if metadata_path.is_file():
+            try:
+                payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict) or not isinstance(payload.get("unmatched_games", []), list):
+                    raise ValueError("Scan report metadata must contain an unmatched_games list")
+                imported = [
+                    {
+                        "title": str(item["title"]),
+                        "system": str(item.get("system", DEFAULT_SYSTEM)),
+                        "path": str(item.get("path", "")),
+                        "relative": str(item.get("relative", "")),
+                    }
+                    for item in payload.get("unmatched_games", [])
+                    if isinstance(item, dict) and item.get("title")
+                ]
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                messagebox.showwarning(APP_NAME, f"Could not read scan report data:\n{exc}", parent=self)
+                return
+        if not imported:
+            try:
+                lines = report_path.read_text(encoding="utf-8-sig").splitlines()
+            except OSError as exc:
+                messagebox.showwarning(APP_NAME, f"Could not read scan report:\n{exc}", parent=self)
+                return
+            prefix = "No artwork match found for "
+            suffix = " on any of the media providers."
+            for line in lines:
+                line = line.strip()
+                if line.startswith(prefix) and line.endswith(suffix):
+                    title = line[len(prefix):-len(suffix)]
+                    system = SYSTEM_BY_EXTENSION.get(Path(title).suffix.lower(), DEFAULT_SYSTEM)
+                    imported.append({"title": title, "system": system, "path": "", "relative": ""})
+        if not imported:
+            messagebox.showinfo(APP_NAME, "No unmatched game entries were found in that report.", parent=self)
+            return
+        existing = {
+            (item.get("path", "").casefold(), item["title"].casefold(), item.get("system", "").casefold())
+            for item in self.sd_scan_unmatched_games
+        }
+        added = 0
+        for game in imported:
+            key = (game.get("path", "").casefold(), game["title"].casefold(), game.get("system", "").casefold())
+            if key not in existing:
+                self.sd_scan_unmatched_games.append(game)
+                existing.add(key)
+                added += 1
+        self.refresh_sd_scan_game_dropdown()
+        self.status_var.set(f"Imported {added} unmatched game(s) from the scan report.")
+
+    def refresh_sd_scan_game_dropdown(self):
+        self.sd_scan_game_combo.configure(values=[
+            f"{Path(game['path']).name if game.get('path') else game['title']} — {game.get('system', DEFAULT_SYSTEM)}"
+            for game in self.sd_scan_unmatched_games
+        ])
+        self.sd_scan_game_var.set("")
+        self.clear_sd_scan_games_button.configure(
+            state="normal" if self.sd_scan_unmatched_games else "disabled"
+        )
+
+    def remove_sd_scan_game_from_queue(self, game: dict[str, str]):
+        """Remove a manually searched game while retaining its active add-to-custom context."""
+        self.sd_scan_unmatched_games = [
+            queued for queued in self.sd_scan_unmatched_games
+            if (
+                queued.get("path") != game.get("path")
+                if game.get("path")
+                else not (
+                    queued.get("title", "").casefold() == game.get("title", "").casefold()
+                    and queued.get("system", "").casefold() == game.get("system", "").casefold()
+                )
+            )
+        ]
+        self.refresh_sd_scan_game_dropdown()
 
     def hide_suggestions(self):
         if self.suggestion_box and self.suggestion_box.winfo_ismapped():
@@ -1671,10 +3691,17 @@ class ThumbnailScraperApp(tk.Tk):
             self.preview_loading.pack_forget()
 
     def preview_search(self):
+        searched_sd_game = self.active_sd_scan_game
+        if searched_sd_game:
+            self.remove_sd_scan_game_from_queue(searched_sd_game)
+        self.current_result = None
         self.set_preview_loading(True)
+        # A new query replaces the result set; release gallery image objects from
+        # the previous query. Region-priority changes reuse these cached thumbs.
+        self._gallery_thumb_cache.clear()
         def worker():
             try:
-                self.status_var.set("Fetching preview...")
+                self.status_var.set("Searching for artwork…")
                 results = self.providers.search_many(
                     self.preview_provider_var.get(),
                     self.search_var.get(),
@@ -1689,42 +3716,119 @@ class ThumbnailScraperApp(tk.Tk):
                 self.current_source_image = image
                 self.after(0, self.refresh_result_gallery)
             except Exception as exc:
-                self.after(0, lambda: messagebox.showwarning(APP_NAME, str(exc)))
+                self.after(0, lambda error=exc: messagebox.showwarning(APP_NAME, str(error)))
                 self.status_var.set("Preview failed.")
             finally:
                 self.after(0, lambda: self.set_preview_loading(False))
         threading.Thread(target=worker, daemon=True).start()
 
     def build_preview_search(self):
-        if hasattr(self, "build_preview_info"):
-            self.after(0, lambda: self.build_preview_info.configure(text="Loading current look..."))
-        def worker():
+        """Request a build preview without blocking Tk or allowing request storms."""
+        self._schedule_build_preview_search(delay=0)
+
+    def _schedule_build_preview_search(self, delay: int = 650):
+        self._build_preview_generation = getattr(self, "_build_preview_generation", 0) + 1
+        self._build_preview_pending = True
+        pending = getattr(self, "_build_preview_after_id", None)
+        if pending is not None:
             try:
-                if not self.selected_regions():
-                    raise LookupError("Choose at least one region.")
-                self.status_var.set("Fetching build preview...")
-                result = None
-                last_error: Exception | None = None
-                for query in self.build_preview_queries():
+                self.after_cancel(pending)
+            except tk.TclError:
+                pass
+        message = "Region settings changed; waiting to refresh the build preview…" if delay else "Refreshing build preview…"
+        self._set_build_preview_loading(True, message)
+        self._build_preview_after_id = self.after(delay, self._start_scheduled_build_preview_search)
+
+    def _set_build_preview_loading(self, loading: bool, message: str | None = None):
+        if message:
+            self.status_var.set(message)
+            if hasattr(self, "build_preview_info"):
+                self.build_preview_info.configure(text=message)
+        progress = getattr(self, "build_preview_loading", None)
+        if progress is None:
+            return
+        if loading:
+            if not progress.winfo_ismapped():
+                progress.pack(anchor="w", pady=(6, 0), before=self.build_pack_crop_label)
+            if not getattr(self, "_build_preview_spinner_running", False):
+                progress.start(12)
+                self._build_preview_spinner_running = True
+        else:
+            if getattr(self, "_build_preview_spinner_running", False):
+                progress.stop()
+                self._build_preview_spinner_running = False
+            if progress.winfo_ismapped():
+                progress.pack_forget()
+
+    def _start_scheduled_build_preview_search(self):
+        self._build_preview_after_id = None
+        if getattr(self, "_build_preview_worker_running", False):
+            # Let the in-flight request finish; its stale result will be discarded
+            # and the most recent pending selection will then run once.
+            self._build_preview_pending = True
+            return
+        if not self.selected_regions():
+            self._build_preview_pending = False
+            self._set_build_preview_loading(False)
+            self.build_preview_info.configure(text="Select at least one region to load the build preview.")
+            self.status_var.set("No game regions are enabled.")
+            return
+
+        token = self._build_preview_generation
+        queries = tuple(self.build_preview_queries())
+        provider = self.build_provider_var.get()
+        libretro_source = self.build_libretro_source_var.get()
+        self._build_preview_pending = False
+        self._build_preview_worker_running = True
+        selected = ", ".join(self.ordered_regions())
+        self._set_build_preview_loading(True, f"Searching {provider} artwork for {selected}…")
+
+        def worker():
+            result = None
+            last_error: Exception | None = None
+            try:
+                for query in queries:
+                    if token != self._build_preview_generation:
+                        break
                     try:
                         result = self.providers.search(
-                            self.build_provider_var.get(),
+                            provider,
                             query,
-                            libretro_source=self.build_libretro_source_var.get(),
+                            libretro_source=libretro_source,
                         )
                         break
                     except Exception as exc:
                         last_error = exc
-                if result is None:
-                    raise last_error or LookupError("No build preview artwork found.")
-                image = Image.open(__import__("io").BytesIO(result.image_data))
-                self.build_result = result
-                self.build_source_image = image
-                self.after(0, self.update_build_preview)
+                self.after(0, lambda: self._finish_build_preview_search(token, result, last_error))
             except Exception as exc:
-                self.after(0, lambda: messagebox.showwarning(APP_NAME, str(exc)))
-                self.status_var.set("Build preview failed.")
+                self.after(0, lambda error=exc: self._finish_build_preview_search(token, None, error))
+
         threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_build_preview_search(self, token: int, result, error: Exception | None):
+        self._build_preview_worker_running = False
+        if token != self._build_preview_generation:
+            if self._build_preview_pending and self._build_preview_after_id is None:
+                self._build_preview_after_id = self.after(0, self._start_scheduled_build_preview_search)
+            return
+
+        self._build_preview_pending = False
+        self._set_build_preview_loading(False)
+        if result is not None:
+            try:
+                with Image.open(io.BytesIO(result.image_data)) as image:
+                    source_image = image.copy()
+                self.build_result = result
+                self.build_source_image = source_image
+                self.update_build_preview()
+            except Exception as exc:
+                self.build_preview_info.configure(text=f"Could not display build preview: {exc}")
+                self.status_var.set("Build preview could not be displayed.")
+            return
+
+        detail = str(error or "No build preview artwork found.")
+        self.build_preview_info.configure(text=f"Preview unavailable: {detail}")
+        self.status_var.set(f"Build preview unavailable: {detail}")
 
     def refresh_result_gallery(self):
         for child in self.gallery_frame.winfo_children():
@@ -1745,9 +3849,20 @@ class ThumbnailScraperApp(tk.Tk):
                 card = ttk.Frame(self.gallery_frame, style="Panel.TFrame")
                 card.grid(row=row + index // columns, column=index % columns, sticky="nw", padx=(0, 10), pady=(0, 8))
                 try:
-                    image = Image.open(__import__("io").BytesIO(result.image_data))
-                    thumb = crop_image(image, self.selected_size()[:2], self.current_crop()).resize((72, 72 if self.size_var.get() == "80x80" else 48), Image.Resampling.NEAREST)
-                    photo = ImageTk.PhotoImage(thumb)
+                    width, height, _folder = self.selected_size()
+                    crop = self.current_crop()
+                    cache_key = (
+                        id(result), width, height,
+                        round(crop.zoom, 4), round(crop.x, 3), round(crop.y, 3),
+                    )
+                    photo = self._gallery_thumb_cache.get(cache_key)
+                    if photo is None:
+                        with Image.open(io.BytesIO(result.image_data)) as image:
+                            thumb = crop_image(image, (width, height), crop).resize(
+                                (72, 72 if height == 80 else 48), Image.Resampling.NEAREST
+                            )
+                        photo = ImageTk.PhotoImage(thumb)
+                        self._gallery_thumb_cache[cache_key] = photo
                     self.result_thumbs.append(photo)
                     label = tk.Label(card, image=photo, bg="#101a29", cursor="hand2")
                     label.pack()
@@ -1779,6 +3894,11 @@ class ThumbnailScraperApp(tk.Tk):
         self.refresh_result_gallery()
 
     def cache_provider_result(self, result: ProviderResult, source: str = "manual") -> str:
+        if not is_valid_image_data(result.image_data):
+            raise ValueError(
+                f'The artwork provider returned invalid or incomplete image data for "{result.label}". '
+                "Try scanning again or use another artwork source."
+            )
         digest = hashlib.sha256(
             f"{result.system}|{source}|{result.label}".encode("utf-8") + result.image_data
         ).hexdigest()[:24]
@@ -1792,16 +3912,20 @@ class ThumbnailScraperApp(tk.Tk):
 
     def add_preview_to_custom(self):
         if not self.current_result:
-            messagebox.showinfo(APP_NAME, "Fetch or choose an image first.")
+            messagebox.showinfo(APP_NAME, "Search for artwork or choose an image first.")
             return
         dialog = tk.Toplevel(self)
-        dialog.title("Add To Custom Art")
+        dialog.title("Add to Custom Art")
         dialog.configure(bg="#152235")
         dialog.transient(self)
         dialog.grab_set()
         dialog.resizable(False, False)
         ttk.Label(dialog, text="Exact filename without its extension").grid(row=0, column=0, sticky="w", padx=16, pady=(16, 6))
-        initial_name = Path(self.search_var.get().strip()).stem or display_libretro_name(self.current_result.label)
+        sd_game = self.active_sd_scan_game
+        initial_name = (
+            Path(sd_game.get("path") or sd_game["title"]).stem if sd_game
+            else Path(self.search_var.get().strip()).stem or display_libretro_name(self.current_result.label)
+        )
         name_var = tk.StringVar(value=initial_name)
         entry = ttk.Entry(dialog, textvariable=name_var, width=42)
         entry.grid(row=1, column=0, sticky="ew", padx=16)
@@ -1829,25 +3953,49 @@ class ThumbnailScraperApp(tk.Tk):
                 return
             self.custom_roms.append(
                 CustomRomItem(
-                    "",
+                    sd_game.get("path", "") if sd_game else "",
                     name,
                     "----",
                     name,
                     image_path=image_path,
                     size=selected_size,
-                    system=self.preview_system_var.get(),
+                    system=sd_game.get("system", self.preview_system_var.get()) if sd_game else self.preview_system_var.get(),
+                    rom_relative_path=sd_game.get("relative", "") if sd_game else "",
                 )
             )
             self.refresh_custom_roms([len(self.custom_roms) - 1])
             self.save_settings()
             self.notebook.select(self.custom_tab)
             self.status_var.set(f"Added {name} to Custom Art.")
+            if sd_game:
+                self.active_sd_scan_game = None
+                self.sd_scan_game_var.set("")
             dialog.destroy()
 
         ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side="right", padx=(8, 0))
         ttk.Button(buttons, text="Add", style="Accent.TButton", command=add).pack(side="right")
         entry.bind("<Return>", lambda _event: add())
         entry.focus_set()
+
+    def custom_art_relative_path(self, item: CustomRomItem) -> str:
+        """Return the ROM-relative path used by mirror mode, when available."""
+        if item.rom_relative_path:
+            return item.rom_relative_path.replace("\\", "/")
+        if item.rom_path and item.system:
+            try:
+                return infer_relative_rom_path(Path(item.rom_path), item.system)
+            except (OSError, ValueError):
+                return ""
+        return ""
+
+    @staticmethod
+    def is_extension_default_name(name: str) -> bool:
+        """Extension defaults are loaded directly by the kernel, outside its index."""
+        supported_extensions = {
+            extension.lstrip(".").casefold()
+            for extension in SYSTEM_BY_EXTENSION
+        }
+        return name.casefold() in supported_extensions
 
     def scan_sd_card(self):
         if self.scan_running:
@@ -1863,16 +4011,16 @@ class ThumbnailScraperApp(tk.Tk):
         dialog.grab_set()
         dialog.resizable(False, False)
         dialog.columnconfigure(0, weight=1)
-        ttk.Label(dialog, text="Find artwork for installed games", style="Section.TLabel").grid(
+        ttk.Label(dialog, text="Find artwork for games found on the SD card", style="Section.TLabel").grid(
             row=0, column=0, columnspan=2, sticky="w", padx=18, pady=(18, 6)
         )
         ttk.Label(
             dialog,
-            text=f"Scanning: {root}",
+            text=f"SD card: {root}\nChoose the SD card root to preserve the folder paths used by your ROM browser.",
             style="Muted.TLabel",
             wraplength=480,
         ).grid(row=1, column=0, columnspan=2, sticky="w", padx=18, pady=(0, 14))
-        ttk.Label(dialog, text="Artwork type").grid(row=2, column=0, sticky="w", padx=(18, 8), pady=5)
+        ttk.Label(dialog, text="Artwork Type").grid(row=2, column=0, sticky="w", padx=(18, 8), pady=5)
         source_var = tk.StringVar(value="Box Art")
         ttk.Combobox(
             dialog,
@@ -1881,7 +4029,7 @@ class ThumbnailScraperApp(tk.Tk):
             state="readonly",
             width=24,
         ).grid(row=2, column=1, sticky="ew", padx=(8, 18), pady=5)
-        ttk.Label(dialog, text="Create").grid(row=3, column=0, sticky="w", padx=(18, 8), pady=5)
+        ttk.Label(dialog, text="Thumbnail Sizes").grid(row=3, column=0, sticky="w", padx=(18, 8), pady=5)
         sizes_var = tk.StringVar(value="Wide and square")
         ttk.Combobox(
             dialog,
@@ -1896,14 +4044,31 @@ class ThumbnailScraperApp(tk.Tk):
             text="Include Game Boy Advance files",
             variable=include_gba_var,
         ).grid(row=4, column=0, columnspan=2, sticky="w", padx=18, pady=(10, 2))
+        use_hash_matching_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            dialog,
+            text="Use ROM hashes if name searches fail (slower; reads ROM files)",
+            variable=use_hash_matching_var,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=18, pady=(8, 2))
+        auto_fallback_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            dialog,
+            text="Try fallback providers automatically if artwork cannot be downloaded",
+            variable=auto_fallback_var,
+        ).grid(row=6, column=0, columnspan=2, sticky="w", padx=18, pady=(6, 2))
         ttk.Label(
             dialog,
-            text="GBA artwork is normally supplied by a standard thumbnail pack. Other supported systems use CUSTOM artwork.",
+            text=(
+                "Search order: Libretro → TheGamesDB → ScreenScraper → IGDB. "
+                "Automatic fallback skips the prompt after a download fails. "
+                "ROM hash searches check TheGamesDB and ScreenScraper. "
+                "Mirrored artwork follows ROM folders under IMGS and IMGS2."
+            ),
             style="Muted.TLabel",
             wraplength=480,
-        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=18, pady=(0, 14))
+        ).grid(row=7, column=0, columnspan=2, sticky="w", padx=18, pady=(0, 14))
         buttons = ttk.Frame(dialog, style="Panel.TFrame")
-        buttons.grid(row=6, column=0, columnspan=2, sticky="e", padx=18, pady=(0, 18))
+        buttons.grid(row=8, column=0, columnspan=2, sticky="e", padx=18, pady=(0, 18))
 
         def begin():
             size_names = {
@@ -1912,30 +4077,57 @@ class ThumbnailScraperApp(tk.Tk):
                 "Square, 80x80": ["80x80"],
             }[sizes_var.get()]
             dialog.destroy()
-            self.start_sd_scan(root, source_var.get(), size_names, include_gba_var.get())
+            self.start_sd_scan(
+                root, source_var.get(), size_names, include_gba_var.get(),
+                use_hash_matching=use_hash_matching_var.get(),
+                auto_fallback=auto_fallback_var.get(),
+            )
 
         ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side="right", padx=(8, 0))
         ttk.Button(buttons, text="Scan", style="Accent.TButton", command=begin).pack(side="right")
 
-    def start_sd_scan(self, root: Path, source: str, size_names: list[str], include_gba: bool):
+    def start_sd_scan(
+        self, root: Path, source: str, size_names: list[str], include_gba: bool,
+        use_hash_matching: bool = False, auto_fallback: bool = False,
+    ):
         if self.scan_running:
             return
         self.scan_running = True
         self.scan_sd_button.configure(state="disabled")
-        self.status_var.set("Scanning the SD card for supported games...")
+        self.status_var.set("Scanning the SD card for supported games…")
+        self.sd_scan_progress_window = OperationProgressWindow(
+            self,
+            "Scan SD Card",
+            "Scanning folders on the SD card…",
+        )
+
+        def report_progress(heading, current=None, total=None, detail=""):
+            self.queue_operation_progress(
+                "sd_scan_progress_window", heading, current, total, detail
+            )
 
         def worker():
             try:
-                result = self._scan_sd_worker(root, source, size_names, include_gba)
+                result = self._scan_sd_worker(
+                    root,
+                    source,
+                    size_names,
+                    include_gba,
+                    progress_callback=report_progress,
+                    use_hash_matching=use_hash_matching,
+                    auto_fallback=auto_fallback,
+                )
                 self.after(0, lambda: self.finish_sd_scan(result))
             except Exception as exc:
                 self.after(0, lambda error=exc: self.fail_sd_scan(error))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def supported_files_on_sd(self, root: Path, include_gba: bool) -> list[tuple[Path, str]]:
+    def supported_files_on_sd(self, root: Path, include_gba: bool, progress_callback=None) -> list[tuple[Path, str]]:
         found: list[tuple[Path, str]] = []
+        folders_visited = 0
         for current, directories, filenames in os.walk(root):
+            folders_visited += 1
             directories[:] = [
                 name
                 for name in directories
@@ -1952,7 +4144,200 @@ class ThumbnailScraperApp(tk.Tk):
                 if path.name.casefold() in {"ezkernel.bin", "ezkernelnew.bin"}:
                     continue
                 found.append((path, system))
+            if progress_callback and (folders_visited == 1 or folders_visited % 8 == 0):
+                progress_callback(
+                    "Scanning SD card folders",
+                    None,
+                    None,
+                    f"Folders visited: {folders_visited:,}; supported ROMs found: {len(found):,}",
+                )
+        if progress_callback:
+            progress_callback(
+                "SD card folder scan complete",
+                1,
+                1,
+                f"Found {len(found):,} supported ROM files in {folders_visited:,} folders.",
+            )
         return sorted(found, key=lambda item: str(item[0]).casefold())
+
+    def sd_scan_cache_path(self, source_folder: str, system: str, art_name: str) -> Path:
+        """Stable on-disk cache path for an artwork source match.
+
+        The key includes the system and provider/art folder so the same title
+        can have distinct cached box art, screenshots, and title screens.
+        """
+        identity = f"{system.casefold()}\0{source_folder.casefold()}\0{art_name.casefold()}"
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+        return self.base_dir / CACHE_FOLDER_NAME / "SD scan artwork" / f"{digest}.png"
+
+    def sd_scan_rom_cache_path(self, source_folder: str, system: str, relative_rom_path: str) -> Path:
+        """Return the durable per-ROM source-image cache path.
+
+        This lookup key is available before asking any online artwork provider,
+        so a previous scan can reuse a cached image even if a provider is now
+        unavailable or the provider's search result ordering has changed.
+        """
+        identity = (
+            f"{system.casefold()}\0{source_folder.casefold()}\0"
+            f"{relative_rom_path.replace(chr(92), '/').casefold()}"
+        )
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+        return self.base_dir / CACHE_FOLDER_NAME / "SD scan ROM artwork" / f"{digest}.png"
+
+    def sd_thumbnail_output_roots(self, root: Path, size: str) -> list[Path]:
+        """Return the possible existing output directories for one size.
+
+        Build this list once per scan rather than relisting old build folders for
+        every game, which keeps incremental scans responsive for large libraries.
+        """
+        _width, _height, folder_name = self.size_details(size)
+        output_roots = [Path(root) / "SYSTEM" / folder_name, Path(root) / folder_name]
+        generated_roots = (
+            self.base_dir / OUTPUT_FOLDER_NAME,
+            # Continue reusing complete artwork made before the folder rename.
+            self.base_dir / "DS Style Thumbnail Scraper output",
+        )
+        previous_runs = []
+        for generated_root in generated_roots:
+            if not generated_root.is_dir():
+                continue
+            try:
+                children = [entry for entry in generated_root.iterdir() if entry.is_dir()]
+                for child in children:
+                    if child.name.casefold() == THUMBNAIL_PACKS_FOLDER_NAME.casefold():
+                        previous_runs.extend(entry for entry in child.iterdir() if entry.is_dir())
+                    else:
+                        previous_runs.append(child)
+            except OSError:
+                continue
+        previous_runs.sort(key=lambda entry: entry.name.casefold(), reverse=True)
+        output_roots.extend(run / folder_name for run in previous_runs)
+        return output_roots
+
+    def existing_sd_thumbnail(
+        self,
+        root: Path,
+        relative: str,
+        size: str,
+        output_roots: list[Path] | None = None,
+    ) -> Path | None:
+        """Find an already-built mirrored thumbnail on the SD or in prior output."""
+        width, height, _folder_name = self.size_details(size)
+        if output_roots is None:
+            output_roots = self.sd_thumbnail_output_roots(root, size)
+
+        checked: set[str] = set()
+        for output_root in output_roots:
+            try:
+                candidate = mirrored_thumbnail_path(output_root, relative)
+            except ValueError:
+                continue
+            identity = str(candidate).casefold()
+            if identity in checked:
+                continue
+            checked.add(identity)
+            if is_valid_image_file(candidate, (width, height)):
+                return candidate
+        return None
+
+    def cache_sd_scan_image(self, cache_path: Path, data: bytes, overwrite: bool = False) -> str:
+        """Persist a validated provider response as a reusable PNG cache file."""
+        if not is_valid_image_data(data):
+            raise ValueError("Cannot cache invalid or incomplete artwork data.")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        if overwrite or not is_valid_image_file(cache_path):
+            with Image.open(io.BytesIO(data)) as source_image:
+                source_image.load()
+                converted = source_image.convert("RGBA")
+                temporary = cache_path.with_suffix(".tmp.png")
+                converted.save(temporary, format="PNG")
+                temporary.replace(cache_path)
+        return str(cache_path)
+
+    def ask_sd_download_fallback_skip(self, system: str, art_name: str, error: Exception | str) -> str:
+        """Prompt whether to try the next artwork provider or skip this image."""
+        completed = threading.Event()
+        answer = {"choice": "skip"}
+        detail = str(error).strip() or "The provider returned invalid image data."
+        if len(detail) > 360:
+            detail = detail[:357] + "..."
+
+        def show_dialog():
+            dialog = None
+            try:
+                dialog = tk.Toplevel(self)
+                dialog.title("Artwork Image Unavailable")
+                dialog.configure(bg="#152235")
+                dialog.transient(self)
+                dialog.resizable(False, False)
+                dialog.columnconfigure(0, weight=1)
+                ttk.Label(
+                    dialog,
+                    text=f"Could not download usable artwork for {display_libretro_name(art_name)}\nSystem: {system}",
+                    style="Section.TLabel",
+                    wraplength=430,
+                ).grid(row=0, column=0, sticky="w", padx=18, pady=(18, 8))
+                ttk.Label(
+                    dialog,
+                    text=(
+                        f"Error: {detail}\n\nTry the next artwork provider?\n"
+                        "Fallback order: TheGamesDB → ScreenScraper → IGDB."
+                    ),
+                    style="Muted.TLabel",
+                    wraplength=430,
+                ).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 16))
+                auto_fallback_state = getattr(self, "_sd_auto_fallback_state", None)
+                auto_fallback_var = tk.BooleanVar(
+                    value=bool(auto_fallback_state and auto_fallback_state.get("enabled"))
+                )
+                ttk.Checkbutton(
+                    dialog,
+                    text="Automatically try fallback for the rest of this scan",
+                    variable=auto_fallback_var,
+                ).grid(row=2, column=0, sticky="w", padx=18, pady=(0, 12))
+                buttons = ttk.Frame(dialog, style="Panel.TFrame")
+                buttons.grid(row=3, column=0, sticky="e", padx=18, pady=(0, 18))
+
+                def finish(choice: str):
+                    answer["choice"] = choice
+                    if auto_fallback_state is not None:
+                        auto_fallback_state["enabled"] = bool(auto_fallback_var.get())
+                    try:
+                        if dialog is not None and dialog.winfo_exists():
+                            dialog.grab_release()
+                            dialog.destroy()
+                    except tk.TclError:
+                        pass
+                    completed.set()
+
+                dialog.protocol("WM_DELETE_WINDOW", lambda: finish("skip"))
+                ttk.Button(buttons, text="Skip Image", command=lambda: finish("skip")).pack(
+                    side="right", padx=(8, 0)
+                )
+                ttk.Button(
+                    buttons,
+                    text="Try Fallback",
+                    style="Accent.TButton",
+                    command=lambda: finish("fallback"),
+                ).pack(side="right")
+                dialog.grab_set()
+                dialog.focus_force()
+            except tk.TclError:
+                try:
+                    if dialog is not None and dialog.winfo_exists():
+                        dialog.grab_release()
+                        dialog.destroy()
+                except tk.TclError:
+                    pass
+                answer["choice"] = "skip"
+                completed.set()
+
+        try:
+            self.after(0, show_dialog)
+        except tk.TclError:
+            return "skip"
+        completed.wait()
+        return answer["choice"]
 
     def _scan_sd_worker(
         self,
@@ -1960,24 +4345,54 @@ class ThumbnailScraperApp(tk.Tk):
         source: str,
         size_names: list[str],
         include_gba: bool,
+        progress_callback=None,
+        use_hash_matching: bool = False,
+        auto_fallback: bool = False,
     ) -> dict:
-        files = self.supported_files_on_sd(root, include_gba)
+        # Shared with the main-thread fallback prompt so its checkbox can apply
+        # automatically to every later download failure in this scan.
+        self._sd_auto_fallback_state = {"enabled": bool(auto_fallback)}
+
+        def report(heading, current=None, total=None, detail=""):
+            if progress_callback:
+                progress_callback(heading, current, total, detail)
+
+        report("Scanning SD card folders", None, None, str(root))
+        files = self.supported_files_on_sd(
+            root,
+            include_gba,
+            progress_callback=lambda heading, current=None, total=None, detail="": report(
+                heading, current, total, detail
+            ),
+        )
         folder = LIBRETRO_SOURCE_FOLDERS.get(source, "Named_Boxarts")
-        existing = {(item.new_code.casefold(), item.size) for item in self.custom_roms}
-        counts = {
-            size: sum(1 for item in self.custom_roms if item.size == size)
-            for size in size_names
-        }
-        matches: list[tuple[Path, str, str]] = []
+        existing_items: dict[tuple[str, str], tuple[int, CustomRomItem]] = {}
+        existing_items_by_relative: dict[str, list[tuple[int, CustomRomItem]]] = {}
+        for index, item in enumerate(self.custom_roms):
+            relative = self.custom_art_relative_path(item)
+            if relative:
+                relative_key = relative.casefold()
+                existing_items[(relative_key, item.size)] = (index, item)
+                existing_items_by_relative.setdefault(relative_key, []).append((index, item))
+
+        candidates: list[SdRomCandidate] = []
         unmatched: list[str] = []
+        unmatched_games: list[dict[str, str]] = []
         seen_targets: set[str] = set()
 
         for number, (path, system) in enumerate(files, start=1):
+            if number == 1 or number % 10 == 0 or number == len(files):
+                report(
+                    "Matching found games against Libretro",
+                    number,
+                    max(1, len(files)),
+                    f"{system}: {path.name}",
+                )
             if number == 1 or number % 20 == 0:
                 self.after(
                     0,
                     lambda current=number, total=len(files): self.status_var.set(
-                        f"Matching installed games... {current}/{total}"
+                        f"Matching found games... {current}/{total}"
                     ),
                 )
             try:
@@ -1985,78 +4400,597 @@ class ThumbnailScraperApp(tk.Tk):
             except ValueError:
                 unmatched.append(f"Unsupported filename: {path.name}")
                 continue
-            target_key = target_name.casefold()
+            try:
+                relative = relative_path_from_root(root, path, system)
+            except (OSError, ValueError):
+                unmatched.append(f"Could not make a ROM-relative path: {path.name}")
+                continue
+            target_key = relative.casefold()
             if target_key in seen_targets:
                 continue
             seen_targets.add(target_key)
-            art_name = self.providers.find_libretro_art_name(target_name, system, folder)
-            if art_name:
-                matches.append((path, system, art_name))
-            else:
-                unmatched.append(f"{system}: {path.name}")
+            # Defer all provider matching until after existing thumbnails and
+            # per-ROM cached source images have been checked. Candidate discovery
+            # itself must not contact online artwork services.
+            candidates.append(SdRomCandidate(path, system, target_name, relative, None))
 
-        downloaded: dict[tuple[str, str], bytes] = {}
-        download_errors: list[str] = []
-        unique_art = {(system, art_name) for _path, system, art_name in matches}
-        if unique_art:
-            self.after(0, lambda: self.status_var.set(f"Downloading {len(unique_art)} matched images..."))
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                future_to_art = {
-                    executor.submit(http_get, libretro_raw_url(system, folder, art_name)): (system, art_name)
-                    for system, art_name in unique_art
-                }
-                for future in as_completed(future_to_art):
-                    key = future_to_art[future]
+        local_pack_matches: dict[str, ProviderResult] = {}
+        # Test instances can be created without initializing Tk; reading vars()
+        # avoids Tk's recursive __getattr__ when an optional setting is absent.
+        app_state = vars(self)
+        priority_setting = app_state.get("local_pack_priority_var")
+        pack_setting = app_state.get("local_pack_var")
+        local_search = getattr(self.providers, "search_local_pack_many", None)
+        local_priority_enabled = bool(priority_setting is not None and priority_setting.get())
+        if local_priority_enabled and pack_setting is not None and pack_setting.get().strip() and callable(local_search):
+            for local_index, candidate in enumerate(candidates, start=1):
+                if local_index == 1 or local_index % 20 == 0 or local_index == len(candidates):
+                    report(
+                        "Searching local pack before cached/provider artwork",
+                        local_index,
+                        max(1, len(candidates)),
+                        f"{candidate.system}: {candidate.path.name}",
+                    )
+                try:
+                    query_title = strip_nointro_tags(candidate.title)
                     try:
-                        downloaded[key] = future.result()
-                    except Exception:
-                        download_errors.append(f"{key[0]}: {display_libretro_name(key[1])}")
+                        local_results = local_search(
+                            query_title, max_results=1, system=candidate.system,
+                            respect_regions=False,
+                        )
+                    except TypeError:
+                        local_results = local_search(query_title, max_results=1, system=candidate.system)
+                    if local_results and is_valid_image_data(local_results[0].image_data):
+                        local_pack_matches[candidate.relative.casefold()] = local_results[0]
+                except Exception:
+                    # A local miss is not fatal; continue with the normal cache/provider chain.
+                    continue
 
-        additions: list[CustomRomItem] = []
-        skipped_limit: list[str] = []
+        # Resolve candidate directories once per size; thousands of ROMs should
+        # not trigger thousands of repeated directory listings.
+        output_roots_by_size = {
+            size: self.sd_thumbnail_output_roots(root, size)
+            for size in set(size_names)
+        }
+
+        # Decide which ROM/size pairs need work before attempting fallback search.
+        # This avoids querying or downloading fallback art for complete existing
+        # IMGS/IMGS2 output on subsequent scans.
+        needed_sizes: dict[str, set[str]] = {}
+        updates: dict[int, str] = {}
         skipped_existing = 0
-        matched_files = 0
-        for path, system, art_name in matches:
-            data = downloaded.get((system, art_name))
-            if not data:
+        for index, candidate in enumerate(candidates, start=1):
+            if index == 1 or index % 10 == 0 or index == len(candidates):
+                report(
+                    "Checking for existing thumbnails",
+                    index,
+                    max(1, len(candidates)),
+                    candidate.path.name,
+                )
+            target_key = candidate.relative.casefold()
+            if target_key in local_pack_matches:
+                # Queue even already-complete sizes for refresh by the Custom Art build step.
+                needed_sizes[target_key] = set(size_names)
                 continue
-            matched_files += 1
-            result = ProviderResult("Libretro", art_name, data, system)
-            image_path = self.cache_provider_result(result, source)
+            missing: set[str] = set()
             for size in size_names:
-                key = (path.stem.casefold(), size)
-                if key in existing:
+                key = (target_key, size)
+                item_entry = existing_items.get(key)
+                if item_entry:
+                    item_index, item = item_entry
+                    if item.image_path and is_valid_image_file(item.image_path):
+                        skipped_existing += 1
+                        continue
+                output_path = self.existing_sd_thumbnail(
+                    root, candidate.relative, size, output_roots_by_size[size]
+                )
+                if output_path is not None:
+                    if item_entry:
+                        updates[item_entry[0]] = str(output_path)
                     skipped_existing += 1
                     continue
-                if counts.get(size, 0) >= 256:
-                    skipped_limit.append(f"{size}: {path.name}")
+                missing.add(size)
+            if missing:
+                needed_sizes[target_key] = missing
+
+        matches: list[SdArtworkMatch] = []
+        candidates_by_relative = {candidate.relative.casefold(): candidate for candidate in candidates}
+        pre_cache_hits = 0
+        for index, candidate in enumerate(candidates, start=1):
+            if index == 1 or index % 5 == 0 or index == len(candidates):
+                report(
+                    "Checking cached artwork before providers",
+                    index,
+                    max(1, len(candidates)),
+                    f"{candidate.system}: {candidate.path.name}",
+                )
+            target_key = candidate.relative.casefold()
+            # Existing IMGS/IMGS2 and completed entries were checked above. If
+            # nothing needs work for this ROM, do not even query Libretro's index.
+            if not needed_sizes.get(target_key):
+                continue
+            local_result = local_pack_matches.get(target_key)
+            if local_result is not None:
+                matches.append(
+                    SdArtworkMatch(
+                        candidate.path,
+                        candidate.system,
+                        local_result.label,
+                        candidate.relative,
+                        "Local Pack",
+                        local_result.image_data,
+                        local_result.source_path,
+                    )
+                )
+                continue
+
+            # First reuse a saved Custom Art source image associated with this ROM.
+            # The custom-list image path can survive upgrades from older versions.
+            cached_data = b""
+            for _item_index, cached_item in existing_items_by_relative.get(target_key, []):
+                cached_path = Path(cached_item.image_path) if cached_item.image_path else None
+                if cached_path and is_valid_image_file(cached_path):
+                    try:
+                        candidate_data = cached_path.read_bytes()
+                        if is_valid_image_data(candidate_data):
+                            cached_data = candidate_data
+                            break
+                    except OSError:
+                        pass
+
+            # Next check the persistent cache keyed directly by ROM path. This
+            # happens before find_libretro_art_name or any provider search.
+            rom_cache_path = self.sd_scan_rom_cache_path(folder, candidate.system, candidate.relative)
+            if not cached_data and is_valid_image_file(rom_cache_path):
+                try:
+                    candidate_data = rom_cache_path.read_bytes()
+                    if is_valid_image_data(candidate_data):
+                        cached_data = candidate_data
+                    else:
+                        rom_cache_path.unlink(missing_ok=True)
+                except OSError:
+                    cached_data = b""
+            if cached_data:
+                cache_tag = hashlib.sha256(target_key.encode("utf-8")).hexdigest()[:10]
+                matches.append(
+                    SdArtworkMatch(
+                        candidate.path,
+                        candidate.system,
+                        f"{candidate.title} [rom-cache-{cache_tag}]",
+                        candidate.relative,
+                        "Cached",
+                        cached_data,
+                    )
+                )
+                pre_cache_hits += 1
+                continue
+
+            # Remove recognized No-Intro release/dump tags only from the online query.
+            # The original title and relative ROM path remain unchanged for output/cache identity.
+            query_title = strip_nointro_tags(candidate.title)
+
+            # No usable local source image exists: only now ask the online providers.
+            try:
+                art_name = self.providers.find_libretro_art_name(query_title, candidate.system, folder)
+            except Exception:
+                art_name = None
+            candidate.libretro_art_name = art_name
+            if art_name:
+                matches.append(
+                    SdArtworkMatch(candidate.path, candidate.system, art_name, candidate.relative, "Libretro")
+                )
+                continue
+            try:
+                fallback_search = getattr(self.providers, "search_fallback_many", None)
+                if callable(fallback_search):
+                    fallback = fallback_search(
+                        query_title,
+                        max_results=1,
+                        system=candidate.system,
+                        after_provider="Libretro",
+                    )
+                else:
+                    # Compatibility path for older embedders/test doubles.
+                    tgdb_key_var = self.__dict__.get("tgdb_key_var")
+                    if not (tgdb_key_var and tgdb_key_var.get().strip()):
+                        raise LookupError("No Libretro match; add a TheGamesDB API key in Settings for fallback.")
+                    fallback = self.providers.search_thegamesdb_many(
+                        query_title, max_results=1, system=candidate.system
+                    )
+                if not fallback or not is_valid_image_data(fallback[0].image_data):
+                    raise LookupError("No fallback provider returned usable image data")
+                result = fallback[0]
+                matches.append(
+                    SdArtworkMatch(
+                        candidate.path,
+                        candidate.system,
+                        result.label,
+                        candidate.relative,
+                        result.provider,
+                        result.image_data,
+                    )
+                )
+            except Exception as exc:
+                # Local artwork is also a final fallback when local-first is off.
+                # Region preferences guide interactive search, but an installed
+                # game scan should use any matching image already on disk.
+                if pack_setting is not None and pack_setting.get().strip() and callable(local_search):
+                    try:
+                        try:
+                            local_results = local_search(
+                                query_title, max_results=1, system=candidate.system,
+                                respect_regions=False,
+                            )
+                        except TypeError:
+                            # Compatibility for older provider adapters.
+                            local_results = local_search(query_title, max_results=1, system=candidate.system)
+                        if local_results and is_valid_image_data(local_results[0].image_data):
+                            result = local_results[0]
+                            matches.append(
+                                SdArtworkMatch(
+                                    candidate.path, candidate.system, result.label,
+                                    candidate.relative, "Local Pack", result.image_data,
+                                    result.source_path,
+                                )
+                            )
+                            continue
+                    except Exception:
+                        pass
+                # Opt-in hashing runs only after existing outputs, local image cache,
+                # Libretro name matching, and the full online name fallback chain miss.
+                if use_hash_matching:
+                    report(
+                        "Trying ROM hash matching",
+                        index,
+                        max(1, len(candidates)),
+                        f"{candidate.system}: {candidate.path.name}",
+                    )
+                    try:
+                        hash_results = self.providers.search_hash_fallback(
+                            candidate.path, query_title, candidate.system
+                        )
+                        if not hash_results or not is_valid_image_data(hash_results[0].image_data):
+                            raise LookupError("Hash providers returned no usable artwork")
+                        hash_result = hash_results[0]
+                        matches.append(
+                            SdArtworkMatch(
+                                candidate.path, candidate.system, hash_result.label,
+                                candidate.relative, hash_result.provider, hash_result.image_data,
+                            )
+                        )
+                        continue
+                    except Exception as hash_error:
+                        diagnostic = redact_provider_credentials(
+                            f"Name search failed: {exc}; hash search failed: {hash_error}"
+                        )
+                        hash_errors = [
+                            {
+                                "provider": provider,
+                                "detail": redact_provider_credentials(detail),
+                            }
+                            for provider, detail in getattr(hash_error, "provider_errors", {}).items()
+                        ]
+                        unmatched.append(
+                            f"{candidate.system}: {candidate.path.name} ({diagnostic})"
+                        )
+                        unmatched_games.append({
+                            "title": candidate.path.name,
+                            "system": candidate.system,
+                            "path": str(candidate.path),
+                            "relative": candidate.relative,
+                            "diagnostic": diagnostic,
+                            "hash_errors": hash_errors,
+                        })
+                else:
+                    unmatched.append(f"{candidate.system}: {candidate.path.name} (provider fallback chain: {exc})")
+                    diagnostic = redact_provider_credentials(f"Provider fallback failed: {exc}")
+                    unmatched_games.append({
+                        "title": candidate.path.name,
+                        "system": candidate.system,
+                        "path": str(candidate.path),
+                        "relative": candidate.relative,
+                        "diagnostic": diagnostic,
+                    })
+
+        provider_by_relative = {
+            match.relative.casefold(): match.provider
+            for match in matches
+        }
+
+        # Cache identity includes the provider, console and Libretro art folder.
+        # The same title can therefore have separate images from each provider.
+        match_key = lambda match: (match.provider, match.system, match.art_name)
+        matches_by_art: dict[tuple[str, str, str], SdArtworkMatch] = {}
+        needed_art: set[tuple[str, str, str]] = set()
+        for match in matches:
+            key = match_key(match)
+            matches_by_art.setdefault(key, match)
+            if needed_sizes.get(match.relative.casefold()):
+                needed_art.add(key)
+
+        downloaded: dict[tuple[str, str, str], bytes] = {}
+        cache_paths: dict[tuple[str, str, str], Path] = {}
+        download_errors: list[str] = []
+        cache_hits = pre_cache_hits
+        # Previous scraper versions cached source images as CustomRomItem paths.
+        prior_item_cache_by_art: dict[tuple[str, str, str], Path] = {}
+        for match in matches:
+            key = match_key(match)
+            if key not in needed_art:
+                continue
+            for _index, item in existing_items_by_relative.get(match.relative.casefold(), []):
+                if item.image_path and is_valid_image_file(item.image_path):
+                    prior_item_cache_by_art.setdefault(key, Path(item.image_path))
+                    break
+
+        for cache_index, key in enumerate(sorted(needed_art), start=1):
+            if cache_index == 1 or cache_index % 5 == 0 or cache_index == len(needed_art):
+                report(
+                    "Checking cached artwork",
+                    cache_index,
+                    max(1, len(needed_art)),
+                    f"{key[1]}: {display_libretro_name(key[2])}",
+                )
+            provider, system, art_name = key
+            cache_source = folder if provider == "Libretro" else provider
+            cache_path = self.sd_scan_cache_path(cache_source, system, art_name)
+            cache_paths[key] = cache_path
+            match = matches_by_art[key]
+            if provider == "Local Pack" and match.source_path:
+                # Keep local-pack files as read-only sources; the thumbnail
+                # builder opens this path directly instead of caching a copy.
+                continue
+            if provider == "Cached" and match.image_data:
+                # The per-ROM cache was already checked before any provider query.
+                # Populate the general source cache for compatibility with older
+                # paths, while counting only the original per-ROM hit above.
+                try:
+                    self.cache_sd_scan_image(cache_path, match.image_data)
+                    downloaded[key] = cache_path.read_bytes()
+                except Exception as exc:
+                    download_errors.append(
+                        f"{system}: {display_libretro_name(art_name)} (cache write failed: {exc})"
+                    )
+                continue
+            if is_valid_image_file(cache_path):
+                try:
+                    cached_data = cache_path.read_bytes()
+                except OSError:
+                    cached_data = b""
+                if is_valid_image_data(cached_data):
+                    downloaded[key] = cached_data
+                    cache_hits += 1
+                    continue
+                try:
+                    cache_path.unlink()
+                except OSError:
+                    pass
+
+            # Migrate/reuse a prior source-image cache if one is associated with
+            # this ROM entry. This also avoids re-downloading when only size changes.
+            legacy_path = prior_item_cache_by_art.get(key)
+            if legacy_path and is_valid_image_file(legacy_path):
+                try:
+                    legacy_data = legacy_path.read_bytes()
+                    if is_valid_image_data(legacy_data):
+                        self.cache_sd_scan_image(cache_path, legacy_data)
+                        downloaded[key] = cache_path.read_bytes()
+                        cache_hits += 1
+                        continue
+                except (OSError, ValueError, SyntaxError):
+                    pass
+            if cache_path.exists() and not is_valid_image_file(cache_path):
+                try:
+                    cache_path.unlink()
+                except OSError:
+                    pass
+
+            # Fallback searches already downloaded and validated their selected
+            # image. Persist those bytes directly; don't fetch the URL again.
+            match = matches_by_art[key]
+            if match.provider != "Libretro" and match.image_data:
+                data = match.image_data
+                downloaded[key] = data
+                try:
+                    self.cache_sd_scan_image(cache_path, data)
+                    downloaded[key] = cache_path.read_bytes()
+                except Exception as exc:
+                    download_errors.append(
+                        f"{system}: {display_libretro_name(art_name)} (cache write failed: {exc})"
+                    )
+
+        to_download = needed_art - set(downloaded)
+        # Only Libretro matches need a separate raw-image fetch. Fallback results
+        # carry their validated image bytes already.
+        to_download = {key for key in to_download if key[0] == "Libretro"}
+        if to_download:
+            report(
+                "Downloading uncached artwork",
+                0,
+                len(to_download),
+                f"{len(to_download):,} images to download",
+            )
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                future_to_art = {
+                    executor.submit(http_get, libretro_raw_url(system, folder, art_name)): key
+                    for key in sorted(to_download)
+                    for _provider, system, art_name in [key]
+                }
+                for download_index, future in enumerate(as_completed(future_to_art), start=1):
+                    key = future_to_art[future]
+                    _provider, system, art_name = key
+                    url = libretro_raw_url(system, folder, art_name)
+                    report(
+                        "Downloading uncached artwork",
+                        download_index,
+                        len(future_to_art),
+                        f"{system}: {display_libretro_name(art_name)}",
+                    )
+                    try:
+                        data = future.result()
+                        if not is_valid_image_data(data):
+                            raise ValueError("Provider returned invalid or incomplete image data")
+                    except Exception as exc:
+                        auto_fallback_state = getattr(self, "_sd_auto_fallback_state", {})
+                        if auto_fallback_state.get("enabled"):
+                            action = "fallback"
+                        else:
+                            action = self.ask_sd_download_fallback_skip(system, art_name, exc)
+                        if action == "fallback":
+                            candidate = candidates_by_relative.get(matches_by_art[key].relative.casefold())
+                            query = candidate.title if candidate else Path(art_name).stem
+                            try:
+                                try:
+                                    fallback = self.providers.search_fallback_many(
+                                        strip_nointro_tags(query),
+                                        max_results=1,
+                                        system=system,
+                                        after_provider="Libretro",
+                                        prior_errors=[f"Libretro image download: {exc}"],
+                                    )
+                                except Exception as name_fallback_error:
+                                    if not use_hash_matching or candidate is None:
+                                        raise
+                                    report(
+                                        "Trying ROM hash matching",
+                                        download_index,
+                                        len(future_to_art),
+                                        f"{system}: {candidate.path.name}",
+                                    )
+                                    fallback = self.providers.search_hash_fallback(
+                                        candidate.path, strip_nointro_tags(query), system
+                                    )
+                                if not fallback or not is_valid_image_data(fallback[0].image_data):
+                                    raise LookupError("No fallback provider returned usable image data")
+                                provider_by_relative[matches_by_art[key].relative.casefold()] = fallback[0].provider
+                                data = fallback[0].image_data
+                                downloaded[key] = data
+                                cache_path = cache_paths[key]
+                                self.cache_sd_scan_image(cache_path, data)
+                                downloaded[key] = cache_path.read_bytes()
+                                report(
+                                    f"Artwork recovered from {fallback[0].provider}",
+                                    download_index,
+                                    len(future_to_art),
+                                    f"{system}: {query}",
+                                )
+                            except Exception as fallback_error:
+                                download_errors.append(
+                                    f"{system}: {display_libretro_name(art_name)} (fallback failed: {fallback_error})"
+                                )
+                                continue
+                        else:
+                            download_errors.append(
+                                f"{system}: {display_libretro_name(art_name)} (skipped after download error: {exc})"
+                            )
+                            continue
+                    else:
+                        downloaded[key] = data
+                        try:
+                            cache_path = cache_paths[key]
+                            self.cache_sd_scan_image(cache_path, data)
+                            downloaded[key] = cache_path.read_bytes()
+                        except Exception as exc:
+                            download_errors.append(
+                                f"{system}: {display_libretro_name(art_name)} (cache write failed: {exc})"
+                            )
+
+        additions: list[CustomRomItem] = []
+        matched_files = len(matches)
+        provider_matches: dict[str, list[str]] = {}
+        for match in matches:
+            provider = provider_by_relative.get(match.relative.casefold(), match.provider)
+            provider_matches.setdefault(provider, []).append(match.relative)
+        for paths in provider_matches.values():
+            paths.sort(key=str.casefold)
+        for match_index, match in enumerate(matches, start=1):
+            if match_index == 1 or match_index % 10 == 0 or match_index == len(matches):
+                report(
+                    "Preparing Custom Art entries",
+                    match_index,
+                    max(1, len(matches)),
+                    f"{match.system}: {match.path.name}",
+                )
+            relative_key = match.relative.casefold()
+            if not needed_sizes.get(relative_key):
+                continue
+            key_art = match_key(match)
+            if match.provider == "Local Pack" and match.source_path:
+                image_path = match.source_path
+                if not is_valid_image_file(image_path):
+                    download_errors.append(
+                        f"{match.system}: {match.path.name} (local-pack source is no longer available)"
+                    )
+                    continue
+            else:
+                data = downloaded.get(key_art)
+                if not data:
+                    continue
+                # Persist the selected source image by ROM identity, independent
+                # of provider name/label for future offline scan reuse.
+                rom_cache_path = self.sd_scan_rom_cache_path(folder, match.system, match.relative)
+                try:
+                    self.cache_sd_scan_image(
+                        rom_cache_path,
+                        data,
+                        overwrite=(local_priority_enabled and match.provider == "Local Pack"),
+                    )
+                except Exception as exc:
+                    download_errors.append(
+                        f"{match.system}: {match.path.name} (per-ROM cache write failed: {exc})"
+                    )
+                cache_source = folder if match.provider == "Libretro" else match.provider
+                provider_cache_path = cache_paths.get(key_art) or self.sd_scan_cache_path(
+                    cache_source, match.system, match.art_name
+                )
+                # Custom entries use the per-ROM cache so later scans can reuse
+                # this exact image before querying providers.
+                image_path = str(rom_cache_path if is_valid_image_file(rom_cache_path) else provider_cache_path)
+                if not is_valid_image_file(image_path):
+                    try:
+                        image_path = self.cache_provider_result(
+                            ProviderResult(match.provider, match.art_name, data, match.system), cache_source
+                        )
+                    except Exception:
+                        continue
+            for size in needed_sizes[relative_key]:
+                key = (relative_key, size)
+                existing_item = existing_items.get(key)
+                if existing_item:
+                    updates[existing_item[0]] = image_path
                     continue
                 additions.append(
                     CustomRomItem(
-                        str(path),
-                        path.stem,
+                        str(match.path),
+                        match.path.stem,
                         "----",
-                        path.stem,
+                        match.path.stem,
                         image_path=image_path,
                         size=size,
-                        system=system,
+                        system=match.system,
+                        rom_relative_path=match.relative,
                     )
                 )
-                existing.add(key)
-                counts[size] = counts.get(size, 0) + 1
 
         return {
             "files": len(files),
             "matched_files": matched_files,
+            "provider_matches": provider_matches,
             "additions": additions,
+            "updates": updates,
             "unmatched": unmatched,
+            "unmatched_games": unmatched_games,
             "download_errors": download_errors,
-            "skipped_limit": skipped_limit,
             "skipped_existing": skipped_existing,
+            "cache_hits": cache_hits,
         }
 
     def finish_sd_scan(self, result: dict):
+        self.close_operation_progress("sd_scan_progress_window")
         additions = result["additions"]
+        for index, image_path in result.get("updates", {}).items():
+            if 0 <= index < len(self.custom_roms):
+                self.custom_roms[index].image_path = image_path
         self.custom_roms.extend(additions)
         self.refresh_custom_roms(
             list(range(len(self.custom_roms) - len(additions), len(self.custom_roms))) if additions else []
@@ -2068,18 +5002,78 @@ class ThumbnailScraperApp(tk.Tk):
         self.show_sd_scan_results(result)
 
     def fail_sd_scan(self, error: Exception):
+        self.close_operation_progress("sd_scan_progress_window")
         self.scan_running = False
         self.scan_sd_button.configure(state="normal")
         self.status_var.set("SD scan failed.")
         messagebox.showwarning(APP_NAME, str(error))
 
     def show_sd_scan_results(self, result: dict):
+        unmatched_games = result.get("unmatched_games", [])
+        if len(unmatched_games) > 50:
+            add_to_queue = messagebox.askyesno(
+                APP_NAME,
+                f"{len(unmatched_games):,} games had no artwork match. Add them to the manual search list?",
+                detail="A large list can be difficult to review. You can still use the saved scan report if you skip the list.",
+                parent=self,
+            )
+            self.sd_scan_unmatched_games = unmatched_games if add_to_queue else []
+        else:
+            self.sd_scan_unmatched_games = unmatched_games
+        options = [
+            f"{Path(game['path']).name} — {game['system']}"
+            for game in self.sd_scan_unmatched_games
+        ]
+        self.sd_scan_game_combo.configure(values=options)
+        self.clear_sd_scan_games_button.configure(state="normal" if options else "disabled")
+        self.sd_scan_game_var.set("")
+        self.active_sd_scan_game = None
+        report_lines = []
+        provider_matches = result.get("provider_matches", {})
+        for provider in sorted(provider_matches, key=str.casefold):
+            paths = provider_matches[provider]
+            if not paths:
+                continue
+            count = len(paths)
+            if count < 5:
+                report_lines.append(f"{provider} matched {count} file{'s' if count != 1 else ''}:")
+                report_lines.extend(f"  - {path}" for path in paths)
+            else:
+                report_lines.append(f"{count:,} files were found at {provider}.")
+        if provider_matches and unmatched_games:
+            report_lines.append("")
+        report_lines.extend(format_hash_lookup_error_lines(unmatched_games))
+        if unmatched_games and report_lines and report_lines[-1] != "":
+            report_lines.append("")
+        for game in unmatched_games:
+            report_lines.append(
+                f"No artwork match found for {game['title']} on any of the media providers."
+            )
+            diagnostic = str(game.get("diagnostic") or "").strip()
+            if diagnostic and not game.get("hash_errors"):
+                # Provider errors can sometimes echo request URLs; redact common
+                # credential query fields before writing user-visible reports.
+                report_lines.append(f"  Lookup details: {diagnostic}")
+        report_dir = self.base_dir / OUTPUT_FOLDER_NAME / "SD Scan Reports"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_path = report_dir / f"sd_scan_{time.strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+        counter = 2
+        while report_path.exists():
+            report_path = report_dir / f"sd_scan_{time.strftime('%Y-%m-%d_%H-%M-%S')}_{counter}.txt"
+            counter += 1
+        report_text = "\n".join(report_lines) if report_lines else "Artwork matches were found for all scanned games."
+        report_path.write_text(report_text + "\n", encoding="utf-8")
+        report_path.with_suffix(".json").write_text(
+            json.dumps({"unmatched_games": unmatched_games}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
         dialog = tk.Toplevel(self)
         dialog.title("SD Scan Results")
         dialog.configure(bg="#152235")
         dialog.transient(self)
-        dialog.geometry("620x430")
-        dialog.minsize(520, 340)
+        dialog.geometry("620x360")
+        dialog.minsize(520, 280)
         dialog.columnconfigure(0, weight=1)
         dialog.rowconfigure(2, weight=1)
         ttk.Label(dialog, text="SD library scan complete", style="Section.TLabel").grid(
@@ -2089,18 +5083,9 @@ class ThumbnailScraperApp(tk.Tk):
             f"Found {result['files']} supported files, matched {result['matched_files']}, "
             f"and added {len(result['additions'])} artwork entries."
         )
-        if result["skipped_existing"]:
-            summary += f" {result['skipped_existing']} existing entries were kept."
         ttk.Label(dialog, text=summary, style="Muted.TLabel", wraplength=570).grid(
             row=1, column=0, sticky="w", padx=18, pady=(0, 10)
         )
-        details = []
-        if result["unmatched"]:
-            details.append("No Libretro match:\n" + "\n".join(result["unmatched"]))
-        if result["download_errors"]:
-            details.append("Could not download:\n" + "\n".join(result["download_errors"]))
-        if result["skipped_limit"]:
-            details.append("Not added because a CUSTOM folder reached 256 images:\n" + "\n".join(result["skipped_limit"]))
         text_box = tk.Text(
             dialog,
             bg="#101a29",
@@ -2110,11 +5095,17 @@ class ThumbnailScraperApp(tk.Tk):
             wrap="word",
             font=("Segoe UI", 9),
         )
-        text_box.grid(row=2, column=0, sticky="nsew", padx=18, pady=(0, 12))
-        text_box.insert("1.0", "\n\n".join(details) if details else "Every supported file was matched.")
+        text_box.grid(row=2, column=0, sticky="nsew", padx=(18, 0), pady=(0, 12))
+        text_scrollbar = ttk.Scrollbar(dialog, orient="vertical", command=text_box.yview)
+        text_scrollbar.grid(row=2, column=1, sticky="ns", padx=(0, 18), pady=(0, 12))
+        text_box.configure(yscrollcommand=text_scrollbar.set)
+        text_box.insert("1.0", report_text)
         text_box.configure(state="disabled")
+        ttk.Label(dialog, text=f"Saved report: {report_path}", style="Muted.TLabel", wraplength=570).grid(
+            row=3, column=0, sticky="w", padx=18, pady=(0, 10)
+        )
         ttk.Button(dialog, text="Done", style="Accent.TButton", command=dialog.destroy).grid(
-            row=3, column=0, sticky="e", padx=18, pady=(0, 18)
+            row=4, column=0, sticky="e", padx=18, pady=(0, 18)
         )
 
     def next_custom_code(self) -> str:
@@ -2133,7 +5124,11 @@ class ThumbnailScraperApp(tk.Tk):
         added = 0
         selected_size = self.size_var.get()
         existing_paths = {(item.rom_path, item.size) for item in self.custom_roms if item.rom_path}
-        existing_names = {(item.new_code.casefold(), item.size) for item in self.custom_roms}
+        existing_names = set()
+        for item in self.custom_roms:
+            relative = self.custom_art_relative_path(item)
+            identity = ("path:" + relative.casefold()) if relative else ("custom:" + item.new_code.casefold())
+            existing_names.add((identity, item.size))
         for raw_path in paths:
             path = Path(raw_path)
             if (str(path), selected_size) in existing_paths:
@@ -2147,7 +5142,10 @@ class ThumbnailScraperApp(tk.Tk):
             except ValueError as exc:
                 messagebox.showwarning(APP_NAME, f"{path.name}: {exc}")
                 continue
-            if (thumb_name.casefold(), selected_size) in existing_names:
+            system = system_for_path(path) or ""
+            relative = infer_relative_rom_path(path, system) if system else ""
+            identity = ("path:" + relative.casefold()) if relative else ("custom:" + thumb_name.casefold())
+            if (identity, selected_size) in existing_names:
                 continue
             self.custom_roms.append(
                 CustomRomItem(
@@ -2156,11 +5154,12 @@ class ThumbnailScraperApp(tk.Tk):
                     code or "----",
                     thumb_name,
                     size=selected_size,
-                    system=system_for_path(path) or "",
+                    system=system,
+                    rom_relative_path=relative,
                 )
             )
             existing_paths.add((str(path), selected_size))
-            existing_names.add((thumb_name.casefold(), selected_size))
+            existing_names.add((identity, selected_size))
             added += 1
         if added:
             self.refresh_custom_roms()
@@ -2173,11 +5172,11 @@ class ThumbnailScraperApp(tk.Tk):
         dialog.transient(self)
         dialog.grab_set()
         dialog.resizable(False, False)
-        ttk.Label(dialog, text="Filename without its extension, or folder name").grid(row=0, column=0, sticky="w", padx=16, pady=(16, 6))
+        ttk.Label(dialog, text="ROM filename (without extension) or system folder").grid(row=0, column=0, sticky="w", padx=16, pady=(16, 6))
         name_var = tk.StringVar()
         entry = ttk.Entry(dialog, textvariable=name_var, width=42)
         entry.grid(row=1, column=0, sticky="ew", padx=16)
-        ttk.Label(dialog, text="Example: Pokemon Emerald Rogue or Game Boy Advance", style="Muted.TLabel").grid(row=2, column=0, sticky="w", padx=16, pady=(6, 12))
+        ttk.Label(dialog, text="For example: Pokemon Emerald Rogue or Game Boy Advance", style="Muted.TLabel").grid(row=2, column=0, sticky="w", padx=16, pady=(6, 12))
         buttons = ttk.Frame(dialog, style="Panel.TFrame")
         buttons.grid(row=3, column=0, sticky="e", padx=16, pady=(0, 16))
 
@@ -2188,8 +5187,12 @@ class ThumbnailScraperApp(tk.Tk):
                 messagebox.showwarning(APP_NAME, str(exc), parent=dialog)
                 return
             selected_size = self.size_var.get()
-            if (name.casefold(), selected_size) in {(item.new_code.casefold(), item.size) for item in self.custom_roms}:
-                messagebox.showinfo(APP_NAME, "That custom name and size is already in the list.", parent=dialog)
+            if (name.casefold(), selected_size) in {
+                (item.new_code.casefold(), item.size)
+                for item in self.custom_roms
+                if not self.custom_art_relative_path(item)
+            }:
+                messagebox.showinfo(APP_NAME, "That name and size are already in the list.", parent=dialog)
                 return
             self.custom_roms.append(CustomRomItem("", name, "----", name, size=selected_size))
             self.refresh_custom_roms([len(self.custom_roms) - 1])
@@ -2249,6 +5252,12 @@ class ThumbnailScraperApp(tk.Tk):
             image_name = Path(item.image_path).name if item.image_path else ""
             source = item.system or ("Manual" if not item.rom_path else "Other")
             self.custom_tree.insert("", "end", iid=str(index), values=(item.new_code, source, item.size, image_name))
+        if hasattr(self, "custom_build_system_combo"):
+            systems = list(dict.fromkeys(item.system for item in self.custom_roms if item.system))
+            values = ["All", *systems]
+            self.custom_build_system_combo.configure(values=values)
+            if self.custom_build_system_var.get() not in values:
+                self.custom_build_system_var.set("All")
         valid_selection = [str(index) for index in preserve_selection if 0 <= index < len(self.custom_roms)]
         if valid_selection:
             self.custom_tree.selection_set(valid_selection)
@@ -2284,7 +5293,7 @@ class ThumbnailScraperApp(tk.Tk):
     def set_custom_image(self):
         indices = self.selected_custom_indices()
         if not indices:
-            messagebox.showinfo(APP_NAME, "Select one or more custom art entries first.")
+            messagebox.showinfo(APP_NAME, "Select one or more entries first.")
             return
         path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp *.webp"), ("All files", "*.*")])
         if not path:
@@ -2303,18 +5312,43 @@ class ThumbnailScraperApp(tk.Tk):
         next_index = min(indices) if self.custom_roms else -1
         self.refresh_custom_roms([min(next_index, len(self.custom_roms) - 1)] if next_index >= 0 else [])
 
+    def clear_all_custom_roms(self):
+        self.custom_roms.clear()
+        self.refresh_custom_roms([])
+        self.save_settings()
+
+    def on_custom_output_layout_changed(self):
+        self.update_custom_preview()
+        self.save_settings()
+
     def apply_custom_code(self):
         indices = self.selected_custom_indices()
         if len(indices) != 1:
-            messagebox.showinfo(APP_NAME, "Select one custom entry to edit its name.")
+            messagebox.showinfo(APP_NAME, "Select one entry to edit its name.")
             return
         try:
             code = validate_custom_art_name(self.custom_code_var.get())
         except ValueError as exc:
             messagebox.showwarning(APP_NAME, str(exc))
             return
-        size = self.custom_roms[indices[0]].size
-        used = {(item.new_code.casefold(), item.size) for index, item in enumerate(self.custom_roms) if index != indices[0]}
+        item = self.custom_roms[indices[0]]
+        if self.custom_output_layout_var.get() == "Mirrored" and self.custom_art_relative_path(item):
+            messagebox.showinfo(
+                APP_NAME,
+                "Mirrored artwork always uses the ROM's actual filename and relative folder. "
+                "Rename the ROM and scan again to change its path. The custom name applies to Custom artwork.",
+            )
+            return
+        size = item.size
+        used = {
+            (other.new_code.casefold(), other.size)
+            for index, other in enumerate(self.custom_roms)
+            if index != indices[0]
+            and (
+                self.custom_output_layout_var.get() == "Custom"
+                or not self.custom_art_relative_path(other)
+            )
+        }
         if (code.casefold(), size) in used:
             messagebox.showwarning(APP_NAME, "That name and size is already used by another custom entry.")
             return
@@ -2327,7 +5361,7 @@ class ThumbnailScraperApp(tk.Tk):
             if hasattr(self, "custom_preview_info"):
                 self.custom_preview_label.configure(image="", width=300, height=210)
                 self.custom_preview_photo = None
-                self.custom_preview_info.configure(text="Choose a ROM and image")
+                self.custom_preview_info.configure(text="Select an entry to preview its image.")
             return
         item = self.custom_roms[indices[0]]
         self.custom_code_var.set(item.new_code)
@@ -2335,7 +5369,7 @@ class ThumbnailScraperApp(tk.Tk):
         if not item.image_path:
             self.custom_preview_label.configure(image="", width=300, height=210)
             self.custom_preview_photo = None
-            self.custom_preview_info.configure(text=f"{item.new_code}.bmp - no image set")
+            self.custom_preview_info.configure(text=f"{item.new_code}.bmp — no image set")
             return
         try:
             image = Image.open(item.image_path)
@@ -2345,43 +5379,178 @@ class ThumbnailScraperApp(tk.Tk):
             self.custom_preview_photo = ImageTk.PhotoImage(preview)
             self.custom_preview_label.configure(image=self.custom_preview_photo, width=w * 3, height=h * 3)
             folder_name = self.size_details(item.size)[2]
-            self.custom_preview_info.configure(text=f"{folder_name}/CUSTOM/{item.new_code}.bmp ({item.size})")
-        except OSError as exc:
+            layout = self.custom_output_layout_var.get()
+            relative = self.custom_art_relative_path(item)
+            if layout == "Mirrored" and relative:
+                mirrored = mirrored_thumbnail_path(Path(folder_name), relative)
+                self.custom_preview_info.configure(text=f"{mirrored.as_posix()} ({item.size})")
+            else:
+                self.custom_preview_info.configure(text=f"{folder_name}/CUSTOM/{item.new_code}.bmp ({item.size})")
+        except (OSError, ValueError) as exc:
             self.custom_preview_info.configure(text=f"Could not preview image: {exc}")
 
     def build_custom_rom_output(self):
-        if not self.custom_roms:
-            messagebox.showinfo(APP_NAME, "Add custom entries first.")
+        if self.custom_build_running:
             return
-        missing = [item.new_code for item in self.custom_roms if not item.image_path]
-        if missing:
-            messagebox.showwarning(APP_NAME, "Set images for every custom entry first.")
-            return
-        counts = {
-            size: len({item.new_code.casefold() for item in self.custom_roms if item.size == size})
-            for size in ("80x80", "120x80")
-        }
-        over_limit = [size for size, count in counts.items() if count > 256]
-        if over_limit:
-            labels = ", ".join(over_limit)
-            messagebox.showwarning(
-                APP_NAME,
-                f"The {labels} CUSTOM output exceeds the 256-image limit. Remove some entries before building.",
+        selected_system = self.custom_build_system_var.get()
+        selected_items = [
+            (index, item)
+            for index, item in enumerate(self.custom_roms)
+            if selected_system == "All" or item.system == selected_system
+        ]
+        if not selected_items:
+            message = (
+                "Add artwork entries first."
+                if selected_system == "All"
+                else f"No artwork entries were found for {selected_system}."
             )
+            messagebox.showinfo(APP_NAME, message)
             return
+        missing = [item.new_code for _index, item in selected_items if not item.image_path]
+        if missing:
+            messagebox.showwarning(APP_NAME, "Set an image for each entry before building the art pack.")
+            return
+
+        layout = self.custom_output_layout_var.get()
+        mirror_entries: dict[int, str] = {}
+        custom_entries: dict[str, set[str]] = {"80x80": set(), "120x80": set()}
+        destinations: dict[tuple[str, str], str] = {}
+        tasks = []
         try:
-            run_dir = self.output_run_dir()
-            for item in self.custom_roms:
-                thumb_name = validate_custom_art_name(item.new_code)
-                image = Image.open(item.image_path)
-                w, h, folder_name = self.size_details(item.size)
-                imgs_dir = run_dir / folder_name
-                thumb = crop_image(image, (w, h), self.crop_from_dict(item.crop))
-                write_ezflash_bmp(thumb, output_path_for_custom_name(imgs_dir, thumb_name))
-            self.status_var.set(f"Custom art output created: {run_dir}")
-            messagebox.showinfo(APP_NAME, f"Custom art output created:\n{run_dir}")
+            # Validate all destinations before doing any disk writes. This catches
+            # collisions in legacy CUSTOM mode before the progress window opens.
+            for index, item in selected_items:
+                relative = self.custom_art_relative_path(item) if layout == "Mirrored" else ""
+                if relative:
+                    mirror_entries[index] = relative
+                elif not self.is_extension_default_name(item.new_code):
+                    custom_entries[item.size].add(item.new_code.casefold())
+
+            custom_file_count = sum(len(names) for names in custom_entries.values())
+            if custom_file_count > 255:
+                messagebox.showwarning(
+                    APP_NAME,
+                    f"Custom output exceeds its 255-file total limit ({custom_file_count} files).\n\n"
+                    "Use Mirrored output for ROM-matched artwork, or reduce the number of Custom entries. "
+                    "System defaults such as gb.bmp and nes.bmp do not count toward the limit.",
+                )
+                return
+
+            for index, item in selected_items:
+                _w, _h, folder_name = self.size_details(item.size)
+                if index in mirror_entries:
+                    relative_target = mirrored_thumbnail_path(Path(folder_name), mirror_entries[index])
+                else:
+                    relative_target = output_path_for_custom_name(Path(folder_name), item.new_code)
+                identity = (item.size, str(relative_target).casefold())
+                if identity in destinations:
+                    messagebox.showwarning(
+                        APP_NAME,
+                        "Two entries would write to the same artwork filename:\n\n"
+                        f"{destinations[identity]}\n{item.new_code}\n\n"
+                        "Use mirrored folders or remove/rename the duplicate entry before building.",
+                    )
+                    return
+                destinations[identity] = item.new_code
+                w, h, _folder = self.size_details(item.size)
+                tasks.append(
+                    {
+                        "image_path": str(item.image_path),
+                        "name": validate_custom_art_name(item.new_code),
+                        "size": item.size,
+                        "width": w,
+                        "height": h,
+                        "target_relative": relative_target.as_posix(),
+                        "crop": asdict(self.crop_from_dict(item.crop)),
+                        "mirrored": index in mirror_entries,
+                    }
+                )
         except Exception as exc:
             messagebox.showwarning(APP_NAME, str(exc))
+            return
+
+        self.custom_build_running = True
+        self.build_custom_art_button.configure(state="disabled")
+        self.custom_art_progress_window = OperationProgressWindow(
+            self,
+            "Build Art Pack",
+            f"Preparing to build {len(tasks):,} thumbnail(s)...",
+        )
+
+        def worker():
+            run_dir = None
+            made_mirrored = 0
+            made_custom = 0
+            try:
+                run_dir = self.output_run_dir()
+                total = len(tasks)
+                for index, task in enumerate(tasks, start=1):
+                    self.queue_operation_progress(
+                        "custom_art_progress_window",
+                        f"Building thumbnail {index:,} of {total:,}",
+                        index - 1,
+                        total,
+                        f"{task['name']}  →  {task['target_relative']}",
+                    )
+                    with Image.open(task["image_path"]) as source_image:
+                        thumb = crop_image(
+                            source_image,
+                            (task["width"], task["height"]),
+                            CropSettings(**task["crop"]),
+                        )
+                        target = run_dir / Path(task["target_relative"])
+                        write_ezflash_bmp(thumb, target)
+                    if task["mirrored"]:
+                        made_mirrored += 1
+                    else:
+                        made_custom += 1
+                    self.queue_operation_progress(
+                        "custom_art_progress_window",
+                        f"Building thumbnail {index:,} of {total:,}",
+                        index,
+                        total,
+                        f"Created {task['name']}  →  {task['target_relative']}",
+                    )
+                self.after(
+                    0,
+                    lambda result_dir=run_dir, mirrored=made_mirrored, custom=made_custom: self.finish_custom_art_output(
+                        result_dir, mirrored, custom, layout, None
+                    ),
+                )
+            except Exception as exc:
+                self.after(
+                    0,
+                    lambda error=exc, result_dir=run_dir, mirrored=made_mirrored, custom=made_custom: self.finish_custom_art_output(
+                        result_dir, mirrored, custom, layout, error
+                    ),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_custom_art_output(
+        self,
+        run_dir: Path | None,
+        made_mirrored: int,
+        made_custom: int,
+        layout: str,
+        error: Exception | None,
+    ):
+        self.close_operation_progress("custom_art_progress_window")
+        self.custom_build_running = False
+        if hasattr(self, "build_custom_art_button"):
+            self.build_custom_art_button.configure(state="normal")
+        if error is not None:
+            self.status_var.set("Art pack build failed.")
+            partial = f"\n\nPartial output may be available at:\n{run_dir}" if run_dir else ""
+            messagebox.showwarning(APP_NAME, f"Could not build the art pack:\n{error}{partial}")
+            return
+        self.status_var.set(f"Art pack created: {run_dir}")
+        extra = (
+            f"\nMirrored files: {made_mirrored}; CUSTOM files: {made_custom}."
+            if layout == "Mirrored"
+            else "\nOutput layout: legacy CUSTOM."
+        )
+        messagebox.showinfo(APP_NAME, f"Art pack created:\n{run_dir}{extra}")
 
     def update_preview(self):
         if not self.current_source_image:
@@ -2410,10 +5579,10 @@ class ThumbnailScraperApp(tk.Tk):
 
     def add_exception(self):
         if self.preview_system_var.get() != DEFAULT_SYSTEM:
-            messagebox.showinfo(APP_NAME, "Full-pack exceptions are only used for Game Boy Advance artwork.")
+            messagebox.showinfo(APP_NAME, "Exceptions only apply to Game Boy Advance artwork.")
             return
         if not self.current_result:
-            messagebox.showinfo(APP_NAME, "Fetch or choose an image first.")
+            messagebox.showinfo(APP_NAME, "Search for artwork or choose an image first.")
             return
         title = self.search_var.get().strip()
         rule = ExceptionRule(
@@ -2459,6 +5628,10 @@ class ThumbnailScraperApp(tk.Tk):
         if path:
             self.local_pack_var.set(path)
             self.providers.local_art_index = None
+            self.providers.local_art_index_root = None
+            self.providers.local_art_files = []
+            self.providers.local_art_indexes_by_system = {}
+            self.providers.local_art_token_indexes_by_system = {}
             self.update_local_pack_label()
             self.save_settings()
             self.on_source_change()
@@ -2475,8 +5648,8 @@ class ThumbnailScraperApp(tk.Tk):
         return [rule for rule in self.exceptions if clean_title(rule.title).lower() == key]
 
     def output_run_dir(self) -> Path:
-        root = self.base_dir / OUTPUT_FOLDER_NAME
-        root.mkdir(exist_ok=True)
+        root = self.base_dir / OUTPUT_FOLDER_NAME / THUMBNAIL_PACKS_FOLDER_NAME
+        root.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
         run = root / stamp
         counter = 2
@@ -2551,13 +5724,34 @@ class ThumbnailScraperApp(tk.Tk):
             prefetched_images = {}
             prefetched_errors = {}
             task_art_names = {}
+            build_state = vars(self)
+            local_priority_var = build_state.get("local_pack_priority_var")
+            local_pack_var = build_state.get("local_pack_var")
+            local_priority_for_build = bool(
+                local_priority_var is not None
+                and local_priority_var.get()
+                and local_pack_var is not None
+                and local_pack_var.get().strip()
+            )
+            if local_priority_for_build:
+                for task_number, (entry, _size_name, rule) in enumerate(tasks, start=1):
+                    if rule:
+                        continue  # Preserve explicit per-title exceptions.
+                    try:
+                        local_result = self.providers.search_local_pack_many(
+                            entry.title, max_results=1, system=DEFAULT_SYSTEM
+                        )[0]
+                        if is_valid_image_data(local_result.image_data):
+                            prefetched_images[task_number] = local_result.image_data
+                    except Exception:
+                        pass
             normal_libretro_build = self.build_provider_var.get() == "Libretro"
             if normal_libretro_build:
                 unique_art_urls = {}
                 self.set_build_progress(0, "Matching artwork to games...", "")
                 art_by_code_root = self.providers.direct_libretro_art_map(self.build_libretro_source_var.get())
                 for task_number, (entry, _size_name, rule) in enumerate(tasks, start=1):
-                    if rule:
+                    if rule or task_number in prefetched_images:
                         continue
                     art_match = art_by_code_root.get(entry.code[:3] if entry.code else "")
                     if art_match:
@@ -2585,7 +5779,10 @@ class ThumbnailScraperApp(tk.Tk):
                                 self.set_build_progress((done_count - 1) / len(future_to_art) * 45, summary, f"Partial output saved to:\n{run_dir}")
                                 return
                             try:
-                                downloaded_art[art_key] = future.result()
+                                image_data = future.result()
+                                if not is_valid_image_data(image_data):
+                                    raise ValueError("Libretro returned invalid or incomplete image data")
+                                downloaded_art[art_key] = image_data
                             except Exception as exc:
                                 prefetched_errors[art_key] = exc
                             self.set_build_progress((done_count / len(future_to_art)) * 45, f"Downloading artwork {done_count} of {len(future_to_art)}...", "")
@@ -2618,7 +5815,23 @@ class ThumbnailScraperApp(tk.Tk):
                         if index in prefetched_images:
                             image = Image.open(io.BytesIO(prefetched_images[index]))
                         elif index in prefetched_errors:
-                            raise prefetched_errors[index]
+                            # A game-code match whose CDN object is missing/invalid
+                            # gets one title-based attempt. That search uses the same
+                            # Libretro-first, TheGamesDB-fallback provider path.
+                            direct_error = prefetched_errors[index]
+                            try:
+                                result = self.providers.search(
+                                    "Libretro",
+                                    entry.title,
+                                    libretro_source=self.build_libretro_source_var.get(),
+                                    system=DEFAULT_SYSTEM,
+                                )
+                                image = Image.open(io.BytesIO(result.image_data))
+                            except Exception as fallback_error:
+                                raise LookupError(
+                                    f"Direct Libretro artwork was unavailable ({direct_error}); "
+                                    f"title-based Libretro/TheGamesDB fallback also failed: {fallback_error}"
+                                ) from fallback_error
                         elif self.build_provider_var.get() == "Libretro":
                             result = self.providers.search(self.build_provider_var.get(), entry.title, libretro_source=self.build_libretro_source_var.get())
                             image = Image.open(io.BytesIO(result.image_data))
@@ -2656,17 +5869,33 @@ class ThumbnailScraperApp(tk.Tk):
                     self.build_progress.pack_forget()
             self.after(0, finish_build_ui)
 
+    def _provider_credentials_snapshot(self) -> tuple[str, ...]:
+        names = ("tgdb_key_var", "ss_dev_id_var", "ss_dev_pass_var", "ss_user_var", "ss_pass_var", "igdb_client_var", "igdb_secret_var")
+        return tuple(getattr(self, name).get().strip() for name in names)
+
     def _load_settings(self):
         if not self.config_path.exists():
+            self._saved_provider_credentials = self._provider_credentials_snapshot()
             return
         try:
             data = json.loads(self.config_path.read_text(encoding="utf-8"))
-            for name in ("local_pack", "igdb_client", "igdb_token", "tgdb_key", "ss_dev_id", "ss_dev_pass", "ss_user", "ss_pass"):
+            if not isinstance(data, dict):
+                raise ValueError("Settings must contain a JSON object")
+            for name in ("local_pack", "igdb_client", "igdb_secret", "igdb_token", "tgdb_key", "ss_dev_id", "ss_dev_pass", "ss_user", "ss_pass"):
                 var = getattr(self, f"{name}_var", None)
                 if var:
                     var.set(data.get(name, ""))
+            if hasattr(self, "local_pack_priority_var"):
+                self.local_pack_priority_var.set(bool(data.get("local_pack_priority", False)))
             if data.get("build_provider") in PROVIDER_VALUES:
                 self.build_provider_var.set(data["build_provider"])
+            saved_layout = data.get("custom_output_layout")
+            if saved_layout in {"Mirrored", "Custom"}:
+                self.custom_output_layout_var.set(saved_layout)
+            elif saved_layout == "Mirror ROM folders":
+                self.custom_output_layout_var.set("Mirrored")
+            elif saved_layout == "Legacy CUSTOM":
+                self.custom_output_layout_var.set("Custom")
             if data.get("preview_provider") in PROVIDER_VALUES:
                 self.preview_provider_var.set(data["preview_provider"])
             if data.get("preview_system") in LIBRETRO_SYSTEMS:
@@ -2693,15 +5922,29 @@ class ThumbnailScraperApp(tk.Tk):
                     var.set(bool(rom_enabled.get(region, True)))
             self.refresh_region_lists()
             loaded = []
-            for item in data.get("exceptions", []):
+            exception_data = data.get("exceptions", [])
+            if not isinstance(exception_data, list):
+                exception_data = []
+            for item in exception_data:
+                if not isinstance(item, dict):
+                    continue
                 item.setdefault("size", "80x80")
                 item.setdefault("source", "")
-                loaded.append(ExceptionRule(**item))
+                try:
+                    loaded.append(ExceptionRule(**item))
+                except (TypeError, ValueError):
+                    continue
             self.exceptions = loaded
             self.refresh_exceptions()
             custom_loaded = []
-            for item in data.get("custom_art", data.get("custom_roms", [])):
+            custom_data = data.get("custom_art", data.get("custom_roms", []))
+            if not isinstance(custom_data, list):
+                custom_data = []
+            for item in custom_data:
+                if not isinstance(item, dict):
+                    continue
                 item.setdefault("rom_path", "")
+                item.setdefault("rom_relative_path", "")
                 item.setdefault("title", item.get("new_code", ""))
                 item.setdefault("old_code", "----")
                 item.setdefault("new_code", item.get("title", ""))
@@ -2716,12 +5959,15 @@ class ThumbnailScraperApp(tk.Tk):
             self.custom_roms = custom_loaded
             self.refresh_custom_roms()
             self.update_local_pack_label()
-        except (OSError, json.JSONDecodeError, TypeError):
+        except (OSError, ValueError, TypeError):
             pass
+        self._saved_provider_credentials = self._provider_credentials_snapshot()
 
     def save_settings(self):
+        local_pack_priority_var = getattr(self, "local_pack_priority_var", None)
         data = {
             "local_pack": self.local_pack_var.get(),
+            "local_pack_priority": bool(local_pack_priority_var.get()) if local_pack_priority_var is not None else False,
             "build_provider": self.build_provider_var.get(),
             "preview_provider": self.preview_provider_var.get(),
             "preview_system": self.preview_system_var.get(),
@@ -2731,6 +5977,9 @@ class ThumbnailScraperApp(tk.Tk):
             "region_enabled": self.region_enabled,
             "rom_region_enabled": {region: var.get() for region, var in self.rom_region_vars.items()},
             "igdb_client": self.igdb_client_var.get(),
+            "igdb_secret": self.igdb_secret_var.get(),
+            # Keep the older manually supplied token in the settings file for
+            # backward compatibility; new usage relies on Client ID + Secret.
             "igdb_token": self.igdb_token_var.get(),
             "tgdb_key": self.tgdb_key_var.get(),
             "ss_dev_id": self.ss_dev_id_var.get(),
@@ -2739,8 +5988,22 @@ class ThumbnailScraperApp(tk.Tk):
             "ss_pass": self.ss_pass_var.get(),
             "exceptions": [asdict(item) for item in self.exceptions],
             "custom_art": [asdict(item) for item in self.custom_roms],
+            "custom_output_layout": self.custom_output_layout_var.get(),
         }
         self.config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        # Preserve provider metadata caches for ordinary UI preference changes.
+        # Invalidate them only when the provider credentials actually change; the
+        # region controls can be clicked frequently and must not force new requests.
+        saved_credentials = getattr(self, "_saved_provider_credentials", None)
+        current_credentials = self._provider_credentials_snapshot()
+        providers = getattr(self, "providers", None)
+        if providers is not None and saved_credentials is not None and current_credentials != saved_credentials:
+            providers._igdb_access_token = ""
+            providers._igdb_token_expires_at = 0.0
+            providers._igdb_platform_ids.clear()
+            providers._igdb_platform_catalog = None
+            providers._screenscraper_system_records = None
+        self._saved_provider_credentials = current_credentials
         self.status_var.set("Saved.")
 
 

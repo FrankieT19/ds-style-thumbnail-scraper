@@ -1,4 +1,4 @@
-DS STYLE THUMBNAIL SCRAPER v1.5
+DS STYLE THUMBNAIL SCRAPER v1.10.5
 
 For DS Style v7.4 or newer.
 
@@ -11,8 +11,55 @@ Run DS Style Thumbnail Scraper.exe.
 
 Finished artwork is saved in a dated folder inside DS Style Thumbnail Scraper output, beside the program.
 
+The Custom Art SD scan now opens a live progress window with the current phase, folder/game or download counts, current item and elapsed time. Build Custom Art also runs in the background and reports each thumbnail as it is written, keeping the application responsive during large builds.
+
 Build complete Game Boy Advance packs from Libretro or a local artwork pack. For other supported systems, choose the console when searching or use Scan SD Card on the Custom Art tab to find artwork only for games already on your card.
 
-Scanned artwork is added to IMGS/CUSTOM and IMGS2/CUSTOM. Each CUSTOM folder supports up to 256 images.
+When a provider returns invalid image data during an SD scan, the scraper offers Try Fallback or Skip Image. Enable automatic fallback in the SD-scan setup or on the first prompt to try configured fallback providers for later titles without repeated prompts. Optional ROM hash matching remains a separate, slower final fallback. Successful source images are cached persistently, and repeat scans skip valid thumbnails already in cache, on the SD card under SYSTEM/IMGS or SYSTEM/IMGS2, or in prior scraper output folders. Corrupt or wrong-sized output thumbnails are regenerated.
+
+The Local Pack folder is a read-only artwork source. When "Prefer matching local-pack art over existing caches and online/hash results" is enabled in Settings, matching local images are searched first, using console-folder names when detected and matching by image filename/title through any nested folders. It refreshes the scraper's source-image cache and queues matching existing entries for rebuild in the Custom Art build step. The scraper only reads the selected local pack; it never writes, renames, or deletes files there.
+
+Console folders in the Local Pack are recognized by common names (for example NES, Nintendo, Original Nintendo, Famicom, Game Boy, GBC, Game Gear, Master System, SMS, TurboGrafx-16, TG16, PC Engine, Neo Geo Pocket Color, NGPC). Artwork for a ROM is taken from that console's folder first, so a Game Boy image is not used for the NES game with the same title. A folder named just "Nintendo" is treated as NES unless it contains a more specific console folder such as "Game Boy". If a console has no folder of its own, artwork in other consoles' folders is skipped and the scraper moves on to the next artwork source.
+
+By default, scanned ROM artwork mirrors each ROM's directory path under IMGS and IMGS2. The mirrored files do not use the flat CUSTOM index and are not limited to 256 images. "Legacy CUSTOM" remains available for older kernels/workflows and is limited to 256 ordinary indexed images per size. Extension defaults such as CUSTOM/gb.bmp are supported by kernels with the matching artwork changes.
+
+AUTOMATIC ARTWORK FALLBACK (v1.10.3)
+
+During Scan SD Card setup, enable "Automatically try fallback providers when artwork is unavailable" to continue through the configured fallback chain without asking about each failed Libretro image download. You can also enable the option in the first "Artwork Image Unavailable" prompt; this affects future titles in that scan, while Try Fallback or Skip Image still controls the current title. Hash matching remains a separate optional final fallback and must be enabled independently.
+
+
+OPTIONAL ROM HASH MATCHING (v1.10.0)
+
+Before starting Scan SD Card, you can enable "Use ROM hash matching if name searches fail". It is off by default. Existing thumbnails and saved image caches are checked first; name-based matching then follows Libretro > TheGamesDB > ScreenScraper > IGDB. Only when those methods find no usable image does hash mode read the ROM file to calculate CRC32, MD5 and SHA-1 plus file size, then try TheGamesDB and ScreenScraper hash-based lookup. This can take longer because it reads the ROM contents. No-Intro region tags such as (USA), (Europe), (Japan), and (USA, Europe) are preserved in online search queries; language, revision/version, status, and square-bracket dump tags are cleaned. The original filenames and output paths are never changed. Compressed archives are not unpacked for hashing; hash lookup applies to the supported ROM file itself.
 
 The scraper does not download games or modify ROM files.
+
+
+THEGAMESDB FALLBACK (v1.7.0 / CREDENTIAL UI v1.8.0)
+
+When a Libretro search has no usable artwork match, the scraper automatically tries TheGamesDB using the selected system's platform ID. Under Settings > Provider Credentials, enter your TheGamesDB API key. Use Get TheGamesDB API key to open the official API page and Test key to check that the saved key works. The key is masked in the field by default and can be revealed with Show. The website username/password are not used by the API fallback; use an API key. Without one, the failed fallback is reported clearly. Platform-name/ID data is cached for 30 days.
+
+BOX ART FIT AND TRANSPARENCY (v1.7.0)
+
+For 80x80 box art, noticeably portrait or landscape images are scaled proportionally and centered rather than cropped to fill the square. The empty area uses the kernel's pure-black transparency key (RGB555 zero). Visible source pixels that would reduce to RGB555 zero are adjusted to #080808 so black artwork remains visible.
+
+
+ARTWORK MIRRORING (v1.6)
+
+In the Custom Art tab, choose "Mirror ROM folders" (recommended), scan the actual SD root, and build. For example, Game Boy/T/Tetris (World).gb becomes IMGS/Game Boy/T/Tetris (World).bmp and IMGS2/Game Boy/T/Tetris (World).bmp. The folder tree in the output matches the ROM tree; the scraper does not automatically reorganize ROMs into letter folders.
+
+Copy the generated IMGS contents to SYSTEM/IMGS and IMGS2 contents to SYSTEM/IMGS2, preserving all subfolders. Scanning from the SD root preserves intermediate grouping folders as well as console and letter folders. This requires a DS Style kernel build that includes mirrored-artwork support; older kernels only use their existing flat CUSTOM lookup.
+
+For an extension-wide default, choose "Enter Name...", enter an extension without the dot (such as gb or nes), set the image and build. It is written as IMGS/CUSTOM/gb.bmp (120x80 title art) or IMGS2/CUSTOM/gb.bmp (80x80 box art).
+
+
+SD SCAN IMAGE-DATA FIX (v1.6.1)
+
+During Custom Art SD scans, the scraper validates downloaded artwork before caching it. If a provider returns an HTML error page, incomplete image or other invalid payload, that entry is skipped and reported in SD Scan Results instead of aborting the entire scan.
+
+
+RETRY AND INCREMENTAL SCANNING (v1.6.2)
+
+If artwork fails to download or the provider returns invalid image data, the scraper displays Retry Download and Skip Image. Successful source images are kept in a persistent cache keyed by console and artwork type. Later scans reuse cached files and skip valid mirrored thumbnails already found under SYSTEM/IMGS, SYSTEM/IMGS2, root-level IMGS/IMGS2, or previous timestamped scraper output. Broken or wrong-sized thumbnails are not treated as complete.
+
+Artwork matching prioritizes standard retail releases over beta, alpha, prototype, demo, hack, mod, fan-translation and other non-retail variants when multiple matches are available.

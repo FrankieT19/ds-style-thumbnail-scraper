@@ -17,8 +17,11 @@ from ezflash_gba_thumbs import (
     load_libretro_index,
     output_path_for_code,
     prepare_image,
+    positive_dimension,
+    non_negative_int,
     write_ezflash_bmp,
 )
+from json_cache import write_json_atomic
 
 
 NOINTRO_GBA_DAT = (
@@ -45,8 +48,18 @@ def decode_dat_string(value: str) -> str:
 
 def load_gba_library(cache_path: Path, refresh: bool = False) -> list[LibraryEntry]:
     if cache_path.exists() and not refresh:
-        data = json.loads(cache_path.read_text(encoding="utf-8"))
-        return [LibraryEntry(title=item["title"], code=item["code"]) for item in data]
+        try:
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(data, list) and data and all(
+                isinstance(item, dict)
+                and isinstance(item.get("title"), str) and item["title"].strip()
+                and isinstance(item.get("code"), str)
+                and re.fullmatch(r"[A-Z0-9]{4}", item["code"])
+                for item in data
+            ):
+                return [LibraryEntry(title=item["title"], code=item["code"]) for item in data]
+        except (OSError, ValueError, TypeError):
+            pass
 
     dat_text = http_get(NOINTRO_GBA_DAT).decode("utf-8", errors="replace")
     entries: list[LibraryEntry] = []
@@ -67,11 +80,9 @@ def load_gba_library(cache_path: Path, refresh: bool = False) -> list[LibraryEnt
         seen.add(key)
         entries.append(LibraryEntry(title=title, code=code))
 
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(
-        json.dumps([entry.__dict__ for entry in entries], indent=2),
-        encoding="utf-8",
-    )
+    if not entries:
+        raise ValueError("The downloaded GBA library contains no valid entries")
+    write_json_atomic(cache_path, [entry.__dict__ for entry in entries])
     return entries
 
 
@@ -86,13 +97,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Output IMGS folder. If omitted, creates IMGS beside this tool.",
     )
-    parser.add_argument("--width", type=int, default=DEFAULT_WIDTH, help="Thumbnail width")
-    parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT, help="Thumbnail height")
+    parser.add_argument("--width", type=positive_dimension, default=DEFAULT_WIDTH, help="Thumbnail width")
+    parser.add_argument("--height", type=positive_dimension, default=DEFAULT_HEIGHT, help="Thumbnail height")
     parser.add_argument("--overwrite", action="store_true", help="Replace existing BMPs")
     parser.add_argument("--refresh-index", action="store_true", help="Refresh cached online indexes")
     parser.add_argument(
         "--limit",
-        type=int,
+        type=non_negative_int,
         default=0,
         help="Process only the first N entries. Useful for testing.",
     )
@@ -108,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         library = load_gba_library(cache_dir / "libretro_nointro_gba_library.json", args.refresh_index)
         boxart_index = load_libretro_index(cache_dir / "libretro_gba_boxarts.json", args.refresh_index)
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, LookupError) as exc:
         print(f"Could not load online indexes: {exc}", file=sys.stderr)
         return 2
 

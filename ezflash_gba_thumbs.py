@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Iterable
 
 from PIL import Image, ImageOps
+from json_cache import write_json_atomic
 
 
 LIBRETRO_API = (
@@ -31,6 +32,22 @@ GBA_TITLE_OFFSET = 0xA0
 GBA_TITLE_LEN = 12
 GBA_CODE_OFFSET = 0xAC
 GBA_CODE_LEN = 4
+
+
+def positive_dimension(value: str) -> int:
+    """Parse a strictly positive image dimension for the GBA utilities."""
+    dimension = int(value)
+    if dimension <= 0:
+        raise argparse.ArgumentTypeError("dimensions must be greater than zero")
+    return dimension
+
+
+def non_negative_int(value: str) -> int:
+    """Parse an optional count where zero means unlimited."""
+    count = int(value)
+    if count < 0:
+        raise argparse.ArgumentTypeError("value must be zero or greater")
+    return count
 
 
 def app_dir() -> Path:
@@ -95,19 +112,29 @@ def http_get(url: str) -> bytes:
 
 def load_libretro_index(cache_path: Path, refresh: bool = False) -> list[str]:
     if cache_path.exists() and not refresh:
-        cached_names = json.loads(cache_path.read_text(encoding="utf-8"))
-        if len(cached_names) > 1000:
-            return cached_names
+        try:
+            cached_names = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(cached_names, list) and len(cached_names) > 1000 and all(
+                isinstance(name, str) and name.lower().endswith(".png") for name in cached_names
+            ):
+                return cached_names
+        except (OSError, ValueError, TypeError):
+            pass
 
     data = json.loads(http_get(LIBRETRO_API).decode("utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("tree"), list):
+        raise ValueError("Libretro returned an invalid thumbnail index")
     names = sorted(
         Path(item["path"]).name
         for item in data.get("tree", [])
-        if item.get("path", "").startswith("Named_Boxarts/")
-        and item.get("path", "").lower().endswith(".png")
+        if isinstance(item, dict)
+        and isinstance(item.get("path"), str)
+        and item["path"].startswith("Named_Boxarts/")
+        and item["path"].lower().endswith(".png")
     )
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps(names, indent=2), encoding="utf-8")
+    if len(names) <= 1000:
+        raise LookupError("Libretro returned an incomplete GBA thumbnail index")
+    write_json_atomic(cache_path, names)
     return names
 
 
@@ -201,9 +228,24 @@ def prepare_image(
         return ImageOps.fit(image, size, method=Image.Resampling.LANCZOS, centering=centering)
 
 
-def write_ezflash_bmp(image: Image.Image, path: Path) -> None:
-    """Write an Omega-style top-down 16-bit BMP with GBA BGR555 pixel words."""
+TRANSPARENT_THUMBNAIL_MARKER = b"DST1"
+
+
+def write_ezflash_bmp(image: Image.Image, path: Path, *, mark_transparency: bool | None = None) -> None:
+    """Write an Omega-style top-down 16-bit BMP with GBA BGR555 pixel words.
+
+    If the image has transparent pixels, mark it with ``DST1`` in the BMP's
+    reserved header bytes so the compatible DS Style kernel knows that RGB555
+    zero is an intentional transparency key. Opaque legacy/GBA artwork remains
+    unmarked, preserving its existing black pixels and rendering behavior.
+    ``mark_transparency`` can be set explicitly by callers that need to force
+    or suppress the marker; by default it follows the image's alpha channel.
+    """
     width, height = image.size
+    if mark_transparency is None:
+        mark_transparency = False
+        if "A" in image.getbands():
+            mark_transparency = image.getchannel("A").getextrema()[0] < 128
     row_bytes = width * 2
     padding = (4 - row_bytes % 4) % 4
     pixel_data_size = (row_bytes + padding) * height
@@ -212,6 +254,10 @@ def write_ezflash_bmp(image: Image.Image, path: Path) -> None:
     header = bytearray()
     header.extend(b"BM")
     header.extend(struct.pack("<IHHI", file_size, 0, 0, 54))
+    if mark_transparency:
+        # The compatible kernel recognizes only explicitly tagged artwork.
+        # Offsets 6..9 are the two reserved words in a standard BMP file header.
+        header[6:10] = TRANSPARENT_THUMBNAIL_MARKER
     header.extend(
         struct.pack(
             "<IiiHHIIiiII",
@@ -231,8 +277,20 @@ def write_ezflash_bmp(image: Image.Image, path: Path) -> None:
 
     pixels = bytearray()
     for y in range(height):
-        for r, g, b in (image.getpixel((x, y)) for x in range(width)):
-            gba_bgr555 = ((b >> 3) << 10) | ((g >> 3) << 5) | (r >> 3)
+        for pixel in (image.getpixel((x, y)) for x in range(width)):
+            if len(pixel) >= 4 and pixel[3] < 128:
+                # The DS Style kernel uses RGB555 word 0 (pure black) as the
+                # color-key transparent pixel in generated thumbnail BMPs.
+                gba_bgr555 = 0x0000
+            else:
+                r, g, b = pixel[:3]
+                red5, green5, blue5 = r >> 3, g >> 3, b >> 3
+                # Because RGB555 discards the low three bits, e.g. #010101
+                # would also encode as the transparent zero word. Lift those
+                # visible near-black pixels to RGB555 (1,1,1), i.e. #080808.
+                if red5 == 0 and green5 == 0 and blue5 == 0:
+                    red5 = green5 = blue5 = 1
+                gba_bgr555 = (blue5 << 10) | (green5 << 5) | red5
             pixels.extend(struct.pack("<H", gba_bgr555))
         if padding:
             pixels.extend(b"\0" * padding)
@@ -244,7 +302,13 @@ def write_ezflash_bmp(image: Image.Image, path: Path) -> None:
 def iter_gba_files(paths: Iterable[Path]) -> Iterable[Path]:
     for path in paths:
         if path.is_dir():
-            yield from sorted(path.rglob("*.gba"))
+            # Path.glob's case sensitivity differs by platform. Filter suffixes
+            # explicitly so .GBA files are found on Linux as well as Windows.
+            yield from (
+                candidate
+                for candidate in sorted(path.rglob("*"))
+                if candidate.suffix.casefold() == ".gba" and candidate.is_file()
+            )
         elif path.suffix.lower() == ".gba":
             yield path
 
@@ -268,11 +332,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--width",
-        type=int,
+        type=non_negative_int,
         default=DEFAULT_WIDTH,
         help="Thumbnail width. Use 0 to preserve box-art aspect ratio instead.",
     )
-    parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT, help="Thumbnail height")
+    parser.add_argument("--height", type=positive_dimension, default=DEFAULT_HEIGHT, help="Thumbnail height")
     parser.add_argument(
         "--fit",
         choices=("contain", "cover"),
@@ -301,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         index = load_libretro_index(cache_path, refresh=args.refresh_index)
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, LookupError) as exc:
         print(f"Could not load online box-art index: {exc}", file=sys.stderr)
         return 2
 
@@ -310,7 +374,7 @@ def main(argv: list[str] | None = None) -> int:
     for rom_path in rom_paths:
         try:
             rom = read_rom_info(rom_path)
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             print(f"skip: {exc}")
             missed += 1
             continue
