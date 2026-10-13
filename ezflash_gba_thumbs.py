@@ -34,6 +34,22 @@ GBA_CODE_OFFSET = 0xAC
 GBA_CODE_LEN = 4
 
 
+def positive_dimension(value: str) -> int:
+    """Parse a strictly positive image dimension for the GBA utilities."""
+    dimension = int(value)
+    if dimension <= 0:
+        raise argparse.ArgumentTypeError("dimensions must be greater than zero")
+    return dimension
+
+
+def non_negative_int(value: str) -> int:
+    """Parse an optional count where zero means unlimited."""
+    count = int(value)
+    if count < 0:
+        raise argparse.ArgumentTypeError("value must be zero or greater")
+    return count
+
+
 def app_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
@@ -286,7 +302,13 @@ def write_ezflash_bmp(image: Image.Image, path: Path, *, mark_transparency: bool
 def iter_gba_files(paths: Iterable[Path]) -> Iterable[Path]:
     for path in paths:
         if path.is_dir():
-            yield from sorted(path.rglob("*.gba"))
+            # Path.glob's case sensitivity differs by platform. Filter suffixes
+            # explicitly so .GBA files are found on Linux as well as Windows.
+            yield from (
+                candidate
+                for candidate in sorted(path.rglob("*"))
+                if candidate.suffix.casefold() == ".gba" and candidate.is_file()
+            )
         elif path.suffix.lower() == ".gba":
             yield path
 
@@ -310,11 +332,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--width",
-        type=int,
+        type=non_negative_int,
         default=DEFAULT_WIDTH,
         help="Thumbnail width. Use 0 to preserve box-art aspect ratio instead.",
     )
-    parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT, help="Thumbnail height")
+    parser.add_argument("--height", type=positive_dimension, default=DEFAULT_HEIGHT, help="Thumbnail height")
     parser.add_argument(
         "--fit",
         choices=("contain", "cover"),
@@ -352,7 +374,7 @@ def main(argv: list[str] | None = None) -> int:
     for rom_path in rom_paths:
         try:
             rom = read_rom_info(rom_path)
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             print(f"skip: {exc}")
             missed += 1
             continue

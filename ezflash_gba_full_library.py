@@ -17,6 +17,8 @@ from ezflash_gba_thumbs import (
     load_libretro_index,
     output_path_for_code,
     prepare_image,
+    positive_dimension,
+    non_negative_int,
     write_ezflash_bmp,
 )
 from json_cache import write_json_atomic
@@ -95,13 +97,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Output IMGS folder. If omitted, creates IMGS beside this tool.",
     )
-    parser.add_argument("--width", type=int, default=DEFAULT_WIDTH, help="Thumbnail width")
-    parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT, help="Thumbnail height")
+    parser.add_argument("--width", type=positive_dimension, default=DEFAULT_WIDTH, help="Thumbnail width")
+    parser.add_argument("--height", type=positive_dimension, default=DEFAULT_HEIGHT, help="Thumbnail height")
     parser.add_argument("--overwrite", action="store_true", help="Replace existing BMPs")
     parser.add_argument("--refresh-index", action="store_true", help="Refresh cached online indexes")
     parser.add_argument(
         "--limit",
-        type=int,
+        type=non_negative_int,
         default=0,
         help="Process only the first N entries. Useful for testing.",
     )

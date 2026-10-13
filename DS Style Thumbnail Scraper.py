@@ -1525,6 +1525,8 @@ class Providers:
         if cache_path.is_file():
             try:
                 cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                if not isinstance(cached, dict):
+                    raise ValueError("The cached platform list is not an object")
                 age = time.time() - float(cached.get("fetched_at", 0))
                 raw = cached.get("platforms")
                 if age < 30 * 24 * 60 * 60 and isinstance(raw, dict) and raw:
@@ -3441,6 +3443,8 @@ class ThumbnailScraperApp(tk.Tk):
         if metadata_path.is_file():
             try:
                 payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict) or not isinstance(payload.get("unmatched_games", []), list):
+                    raise ValueError("Scan report metadata must contain an unmatched_games list")
                 imported = [
                     {
                         "title": str(item["title"]),
@@ -5679,6 +5683,8 @@ class ThumbnailScraperApp(tk.Tk):
             return
         try:
             data = json.loads(self.config_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("Settings must contain a JSON object")
             for name in ("local_pack", "igdb_client", "igdb_secret", "igdb_token", "tgdb_key", "ss_dev_id", "ss_dev_pass", "ss_user", "ss_pass"):
                 var = getattr(self, f"{name}_var", None)
                 if var:
@@ -5720,14 +5726,27 @@ class ThumbnailScraperApp(tk.Tk):
                     var.set(bool(rom_enabled.get(region, True)))
             self.refresh_region_lists()
             loaded = []
-            for item in data.get("exceptions", []):
+            exception_data = data.get("exceptions", [])
+            if not isinstance(exception_data, list):
+                exception_data = []
+            for item in exception_data:
+                if not isinstance(item, dict):
+                    continue
                 item.setdefault("size", "80x80")
                 item.setdefault("source", "")
-                loaded.append(ExceptionRule(**item))
+                try:
+                    loaded.append(ExceptionRule(**item))
+                except (TypeError, ValueError):
+                    continue
             self.exceptions = loaded
             self.refresh_exceptions()
             custom_loaded = []
-            for item in data.get("custom_art", data.get("custom_roms", [])):
+            custom_data = data.get("custom_art", data.get("custom_roms", []))
+            if not isinstance(custom_data, list):
+                custom_data = []
+            for item in custom_data:
+                if not isinstance(item, dict):
+                    continue
                 item.setdefault("rom_path", "")
                 item.setdefault("rom_relative_path", "")
                 item.setdefault("title", item.get("new_code", ""))
@@ -5744,7 +5763,7 @@ class ThumbnailScraperApp(tk.Tk):
             self.custom_roms = custom_loaded
             self.refresh_custom_roms()
             self.update_local_pack_label()
-        except (OSError, json.JSONDecodeError, TypeError):
+        except (OSError, ValueError, TypeError):
             pass
         self._saved_provider_credentials = self._provider_credentials_snapshot()
 

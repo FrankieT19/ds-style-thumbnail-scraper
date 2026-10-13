@@ -13,6 +13,7 @@ from ezflash_gba_thumbs import (
     normalize_for_match,
     output_path_for_code,
     prepare_image,
+    positive_dimension,
     title_match_score,
     write_ezflash_bmp,
 )
@@ -109,8 +110,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Output IMGS folder. If omitted, creates IMGS beside this tool.",
     )
-    parser.add_argument("--width", type=int, default=DEFAULT_WIDTH, help="Thumbnail width")
-    parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT, help="Thumbnail height")
+    parser.add_argument("--width", type=positive_dimension, default=DEFAULT_WIDTH, help="Thumbnail width")
+    parser.add_argument("--height", type=positive_dimension, default=DEFAULT_HEIGHT, help="Thumbnail height")
     parser.add_argument("--overwrite", action="store_true", help="Replace existing BMPs")
     parser.add_argument("--refresh-index", action="store_true", help="Refresh cached metadata")
     return parser
