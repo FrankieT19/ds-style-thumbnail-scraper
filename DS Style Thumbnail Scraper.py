@@ -52,6 +52,8 @@ DEFAULT_SEARCH = "Mario Kart - Super Circuit"
 PREVIEW_RESULT_LIMIT = 64
 REGION_ORDER = ["USA", "Europe", "Japan", "Other"]
 CONTROL_PANEL_WIDTH = 270
+BUTTON_FONT = ("Segoe UI", 10)
+BUTTON_PADDING = (8, 5)
 SEARCH_IGNORED_TITLE_TOKENS = {
     "the",
     "of",
@@ -2271,18 +2273,18 @@ class ThumbnailScraperApp(tk.Tk):
         style.configure("TLabel", background=surface, foreground="#f4f8fc", font=("Segoe UI", 10))
         style.configure("Section.TLabel", background=surface, foreground="#ffffff", font=("Segoe UI", 12, "bold"))
         style.configure("Muted.TLabel", background=surface, foreground="#aebfd2", font=("Segoe UI", 10))
-        style.configure("TButton", background=control, foreground="#f4f8fc", borderwidth=0, focusthickness=0, focuscolor=control, relief="flat", font=("Segoe UI", 10), padding=(8, 4))
+        style.configure("TButton", background=control, foreground="#f4f8fc", borderwidth=0, focusthickness=0, focuscolor=control, relief="flat", font=BUTTON_FONT, padding=BUTTON_PADDING)
         style.map("TButton", background=[("active", "#263a57"), ("pressed", "#1c2b41"), ("focus", control)], foreground=[("disabled", "#718196")], relief=[("pressed", "flat"), ("!pressed", "flat")])
-        style.configure("Accent.TButton", background="#2a5caa", foreground="#ffffff", borderwidth=0, focusthickness=0, focuscolor="#2a5caa", relief="flat", font=("Segoe UI", 10, "bold"), padding=(10, 5))
+        style.configure("Accent.TButton", background="#2a5caa", foreground="#ffffff", borderwidth=0, focusthickness=0, focuscolor="#2a5caa", relief="flat", font=BUTTON_FONT, padding=BUTTON_PADDING)
         style.map("Accent.TButton", background=[("active", "#3269bf"), ("pressed", "#244f94"), ("focus", "#2a5caa")], relief=[("pressed", "flat"), ("!pressed", "flat")])
         style.configure("TNotebook", background=base, borderwidth=0, tabmargins=(0, 0, 18, 0))
         style.configure("TNotebook", bordercolor=edge, lightcolor=edge, darkcolor=edge)
         style.configure("TNotebook.Tab", background=base, foreground="#8fa1b5", borderwidth=1, focusthickness=0, focuscolor=surface, font=("Segoe UI", 10), padding=(14, 8))
         style.configure("TNotebook.Tab", bordercolor=edge, lightcolor=edge, darkcolor=edge)
         style.map("TNotebook.Tab", background=[("selected", surface), ("active", "#101c2d"), ("pressed", "#101c2d"), ("focus", base)], foreground=[("selected", "#ffffff"), ("active", "#c4d0dc")], bordercolor=[("selected", surface), ("active", surface), ("!selected", surface)], lightcolor=[("selected", surface), ("active", surface), ("!selected", surface)], darkcolor=[("selected", surface), ("active", surface), ("!selected", surface)], padding=[("selected", (14, 8)), ("active", (14, 8)), ("pressed", (14, 8))])
-        style.configure("TCombobox", fieldbackground="#101a29", background=control, foreground="#edf4fb", arrowcolor="#dce7f3", selectbackground="#101a29", selectforeground="#edf4fb", bordercolor=edge, lightcolor=edge, darkcolor=edge, insertcolor="#ffffff", borderwidth=0, font=("Segoe UI", 10))
+        style.configure("TCombobox", fieldbackground="#101a29", background=control, foreground="#edf4fb", arrowcolor="#dce7f3", selectbackground="#101a29", selectforeground="#edf4fb", bordercolor=edge, lightcolor=edge, darkcolor=edge, insertcolor="#ffffff", borderwidth=0, font=BUTTON_FONT, padding=BUTTON_PADDING)
         style.map("TCombobox", fieldbackground=[("readonly", "#101a29"), ("!disabled", "#101a29"), ("focus", "#101a29")], foreground=[("readonly", "#edf4fb"), ("!disabled", "#edf4fb"), ("focus", "#ffffff")], selectbackground=[("readonly", "#101a29"), ("focus", "#263e5d")], selectforeground=[("readonly", "#edf4fb"), ("focus", "#ffffff")], background=[("active", "#263a57"), ("pressed", "#1c2b41")], bordercolor=[("focus", edge), ("!focus", edge)])
-        style.configure("TEntry", fieldbackground="#101a29", foreground="#edf4fb", insertcolor="#ffffff", borderwidth=0, bordercolor=edge, lightcolor=edge, darkcolor=edge)
+        style.configure("TEntry", fieldbackground="#101a29", foreground="#edf4fb", insertcolor="#ffffff", borderwidth=0, bordercolor=edge, lightcolor=edge, darkcolor=edge, font=BUTTON_FONT, padding=BUTTON_PADDING)
         style.configure("TCheckbutton", background=surface, foreground="#f4f8fc", font=("Segoe UI", 10), focuscolor=surface)
         style.map("TCheckbutton", background=[("active", surface), ("focus", surface)], foreground=[("active", "#ffffff")])
         style.configure("Treeview", background="#101a29", foreground="#edf4fb", fieldbackground="#101a29", borderwidth=0, font=("Segoe UI", 10), rowheight=28)
@@ -2458,7 +2460,7 @@ class ThumbnailScraperApp(tk.Tk):
     def _build_build_tab(self):
         left = ttk.Frame(self.build_tab, style="Panel.TFrame", width=CONTROL_PANEL_WIDTH)
         left.pack(side="left", fill="y", padx=(0, 18))
-        left.pack_propagate(False)
+        left.grid_propagate(False)
         left.columnconfigure(0, weight=1)
         left.rowconfigure(0, weight=1)
         self.build_controls_canvas = tk.Canvas(left, bg="#152235", highlightthickness=0, bd=0)
@@ -2726,12 +2728,14 @@ class ThumbnailScraperApp(tk.Tk):
         self.custom_tab.columnconfigure(0, weight=1)
         self.custom_tab.rowconfigure(2, weight=1)
         ttk.Label(self.custom_tab, text="Artwork Entries", style="Section.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(
+        self.custom_description_label = ttk.Label(
             self.custom_tab,
             text="Add artwork for games found on your SD card. 'Mirrored' preserves full game library paths; 'Custom' uses a single folder with a 255 total limit.",
             style="Muted.TLabel",
-            wraplength=760,
-        ).grid(row=1, column=0, sticky="w", pady=(8, 14))
+            wraplength=1000,
+        )
+        self.custom_description_label.grid(row=1, column=0, sticky="w", pady=(8, 14))
+        self.custom_tab.bind("<Configure>", self._sync_custom_description_wrap, add="+")
 
         body = ttk.Frame(self.custom_tab, style="Panel.TFrame")
         body.grid(row=2, column=0, sticky="nsew")
@@ -2830,6 +2834,9 @@ class ThumbnailScraperApp(tk.Tk):
             width=20,
         )
         self.custom_build_system_combo.pack(side="left")
+
+    def _sync_custom_description_wrap(self, event):
+        self.custom_description_label.configure(wraplength=max(120, event.width - 40))
 
     def _build_exceptions_tab(self):
         ttk.Label(self.exceptions_tab, text="Per-game Exceptions", style="Section.TLabel").pack(anchor="w")
