@@ -112,7 +112,50 @@ class SdHashMatchingTests(unittest.TestCase):
             self.assertEqual(result["additions"], [])
             self.assertEqual(len(result["unmatched"]), 1)
             self.assertIn("hash search", result["unmatched"][0])
+            self.assertIn("hash providers missed", result["unmatched_games"][0]["diagnostic"])
             self.assertEqual(len(app.providers.hash_calls), 1)
+
+    def test_provider_diagnostics_redact_credentials(self):
+        message = "request failed: https://example.test/?apikey=secret&hash=123"
+
+        self.assertEqual(
+            APP_MODULE.redact_provider_credentials(message),
+            "request failed: https://example.test/?apikey=[redacted]&hash=123",
+        )
+
+    def test_hash_lookup_error_report_lists_small_groups_by_provider(self):
+        games = [
+            {
+                "title": "Super Mario Bros. (World).nes",
+                "hash_errors": [{"provider": "TheGamesDB", "detail": "CRC: no match"}],
+            },
+            {
+                "title": "Metroid (USA).nes",
+                "hash_errors": [{"provider": "TheGamesDB", "detail": "CRC: no match"}],
+            },
+        ]
+
+        lines = APP_MODULE.format_hash_lookup_error_lines(games)
+
+        self.assertIn("TheGamesDB hash matching failed for 2 files:", lines)
+        self.assertIn("  - Super Mario Bros. (World).nes", lines)
+        self.assertIn("    CRC: no match", lines)
+
+    def test_hash_lookup_error_report_summarizes_large_groups(self):
+        games = [
+            {
+                "title": f"Game {index}.nes",
+                "hash_errors": [{"provider": "TheGamesDB", "detail": "no match"}],
+            }
+            for index in range(5)
+        ]
+
+        lines = APP_MODULE.format_hash_lookup_error_lines(games)
+
+        self.assertEqual(
+            lines,
+            ["Hash lookup errors:", "5 errors matching based on hash at TheGamesDB."],
+        )
 
 
 if __name__ == "__main__":

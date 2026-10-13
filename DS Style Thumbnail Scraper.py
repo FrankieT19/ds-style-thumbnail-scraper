@@ -44,7 +44,7 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Thumbnail Scraper"
-APP_VERSION = "1.10.10"
+APP_VERSION = "1.10.11"
 OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper Output"
 THUMBNAIL_PACKS_FOLDER_NAME = "Thumbnail Packs"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
@@ -412,6 +412,46 @@ def request_json(url: str, headers: dict[str, str] | None = None) -> dict:
         raise
 
 
+def redact_provider_credentials(message: str) -> str:
+    """Remove credential query values before provider errors reach scan reports."""
+    return re.sub(
+        r"(?i)((?:apikey|devpassword|devid|ssid|sspassword|password)=)[^&\s]+",
+        r"\1[redacted]",
+        str(message),
+    )
+
+
+def format_hash_lookup_error_lines(unmatched_games: list[dict], detail_limit: int = 5) -> list[str]:
+    """Summarize failed hash lookups by provider, listing small groups by ROM."""
+    failures_by_provider: dict[str, list[tuple[str, str]]] = {}
+    for game in unmatched_games:
+        title = str(game.get("title") or "Unknown ROM")
+        for failure in game.get("hash_errors", []):
+            if not isinstance(failure, dict):
+                continue
+            provider = str(failure.get("provider") or "Unknown provider")
+            detail = str(failure.get("detail") or "").strip()
+            failures_by_provider.setdefault(provider, []).append((title, detail))
+
+    lines: list[str] = []
+    if failures_by_provider:
+        lines.append("Hash lookup errors:")
+    for provider in sorted(failures_by_provider, key=str.casefold):
+        failures = failures_by_provider[provider]
+        if len(failures) >= detail_limit:
+            lines.append(f"{len(failures):,} errors matching based on hash at {provider}.")
+            continue
+        lines.append(
+            f"{provider} hash matching failed for {len(failures)} file"
+            f"{'s' if len(failures) != 1 else ''}:"
+        )
+        for title, detail in failures:
+            lines.append(f"  - {title}")
+            if detail:
+                lines.append(f"    {detail}")
+    return lines
+
+
 def post_json(url: str, body: str, headers: dict[str, str]) -> list | dict:
     request = urllib.request.Request(url, data=body.encode("utf-8"), headers=headers, method="POST")
     try:
@@ -681,6 +721,18 @@ class SdArtworkMatch:
     provider: str = "Libretro"
     image_data: bytes | None = None
     source_path: str | None = None
+
+
+class HashLookupError(LookupError):
+    """Hash search failure retaining the result separately for each provider."""
+
+    def __init__(self, provider_errors: dict[str, str]):
+        self.provider_errors = provider_errors
+        details = "; ".join(
+            f"{provider} hash lookup: {detail}"
+            for provider, detail in provider_errors.items()
+        )
+        super().__init__(f"No usable hash-based artwork match. {details}")
 
 
 class OperationProgressWindow:
@@ -2020,16 +2072,16 @@ class Providers:
     ) -> list[ProviderResult]:
         """Run opt-in hash lookup after all local and name-based matching fails."""
         hashes = compute_rom_hashes(rom_path)
-        errors: list[str] = []
+        errors: dict[str, str] = {}
         if self.provider_is_configured("TheGamesDB"):
             try:
                 result = self.search_thegamesdb_hash_many(hashes, query, max_results=1, system=system)
                 if result and is_valid_image_data(result[0].image_data):
                     return result[:1]
             except Exception as exc:
-                errors.append(f"TheGamesDB hash lookup: {exc}")
+                errors["TheGamesDB"] = str(exc)
         else:
-            errors.append("TheGamesDB hash lookup skipped: API key not configured")
+            errors["TheGamesDB"] = "hash lookup skipped: API key not configured"
 
         if self.provider_is_configured("ScreenScraper"):
             try:
@@ -2039,11 +2091,11 @@ class Providers:
                 if result and is_valid_image_data(result[0].image_data):
                     return result[:1]
             except Exception as exc:
-                errors.append(f"ScreenScraper hash lookup: {exc}")
+                errors["ScreenScraper"] = str(exc)
         else:
-            errors.append("ScreenScraper hash lookup skipped: developer credentials not configured")
+            errors["ScreenScraper"] = "hash lookup skipped: developer credentials not configured"
 
-        raise LookupError("No usable hash-based artwork match. " + "; ".join(errors))
+        raise HashLookupError(errors)
 
 
 def crop_image(image: Image.Image, size: tuple[int, int], crop: CropSettings) -> Image.Image:
@@ -4608,23 +4660,36 @@ class ThumbnailScraperApp(tk.Tk):
                         )
                         continue
                     except Exception as hash_error:
+                        diagnostic = redact_provider_credentials(
+                            f"Name search failed: {exc}; hash search failed: {hash_error}"
+                        )
+                        hash_errors = [
+                            {
+                                "provider": provider,
+                                "detail": redact_provider_credentials(detail),
+                            }
+                            for provider, detail in getattr(hash_error, "provider_errors", {}).items()
+                        ]
                         unmatched.append(
-                            f"{candidate.system}: {candidate.path.name} "
-                            f"(name search: {exc}; hash search: {hash_error})"
+                            f"{candidate.system}: {candidate.path.name} ({diagnostic})"
                         )
                         unmatched_games.append({
                             "title": candidate.path.name,
                             "system": candidate.system,
                             "path": str(candidate.path),
                             "relative": candidate.relative,
+                            "diagnostic": diagnostic,
+                            "hash_errors": hash_errors,
                         })
                 else:
                     unmatched.append(f"{candidate.system}: {candidate.path.name} (provider fallback chain: {exc})")
+                    diagnostic = redact_provider_credentials(f"Provider fallback failed: {exc}")
                     unmatched_games.append({
                         "title": candidate.path.name,
                         "system": candidate.system,
                         "path": str(candidate.path),
                         "relative": candidate.relative,
+                        "diagnostic": diagnostic,
                     })
 
         provider_by_relative = {
@@ -4977,10 +5042,18 @@ class ThumbnailScraperApp(tk.Tk):
                 report_lines.append(f"{count:,} files were found at {provider}.")
         if provider_matches and unmatched_games:
             report_lines.append("")
-        report_lines.extend(
-            f"No artwork match found for {game['title']} on any of the media providers."
-            for game in unmatched_games
-        )
+        report_lines.extend(format_hash_lookup_error_lines(unmatched_games))
+        if unmatched_games and report_lines and report_lines[-1] != "":
+            report_lines.append("")
+        for game in unmatched_games:
+            report_lines.append(
+                f"No artwork match found for {game['title']} on any of the media providers."
+            )
+            diagnostic = str(game.get("diagnostic") or "").strip()
+            if diagnostic and not game.get("hash_errors"):
+                # Provider errors can sometimes echo request URLs; redact common
+                # credential query fields before writing user-visible reports.
+                report_lines.append(f"  Lookup details: {diagnostic}")
         report_dir = self.base_dir / OUTPUT_FOLDER_NAME / "SD Scan Reports"
         report_dir.mkdir(parents=True, exist_ok=True)
         report_path = report_dir / f"sd_scan_{time.strftime('%Y-%m-%d_%H-%M-%S')}.txt"
