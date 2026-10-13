@@ -51,6 +51,7 @@ CONFIG_NAME = "thumbnail_scraper_settings.json"
 DEFAULT_SEARCH = "Mario Kart - Super Circuit"
 PREVIEW_RESULT_LIMIT = 64
 REGION_ORDER = ["USA", "Europe", "Japan", "Other"]
+CONTROL_PANEL_WIDTH = 270
 SEARCH_IGNORED_TITLE_TOKENS = {
     "the",
     "of",
@@ -2404,9 +2405,9 @@ class ThumbnailScraperApp(tk.Tk):
         self.exceptions_tab = ttk.Frame(notebook, style="Panel.TFrame", padding=14)
         self.settings_tab = ttk.Frame(notebook, style="Panel.TFrame", padding=14)
         notebook.add(self.build_tab, text="GBA Pack")
-        notebook.add(self.preview_tab, text="Search & Preview")
+        notebook.add(self.preview_tab, text="Search")
         notebook.add(self.custom_tab, text="Custom Pack")
-        notebook.add(self.exceptions_tab, text="Exceptions")
+        notebook.add(self.exceptions_tab, text="GBA Exceptions")
         notebook.add(self.settings_tab, text="Settings")
         notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
         self._build_build_tab()
@@ -2455,7 +2456,7 @@ class ThumbnailScraperApp(tk.Tk):
             pass
 
     def _build_build_tab(self):
-        left = ttk.Frame(self.build_tab, style="Panel.TFrame", width=270)
+        left = ttk.Frame(self.build_tab, style="Panel.TFrame", width=CONTROL_PANEL_WIDTH)
         left.pack(side="left", fill="y", padx=(0, 18))
         left.pack_propagate(False)
         left.columnconfigure(0, weight=1)
@@ -2534,7 +2535,7 @@ class ThumbnailScraperApp(tk.Tk):
     def _build_preview_tab(self):
         self.preview_tab.columnconfigure(1, weight=1)
         self.preview_tab.rowconfigure(0, weight=1)
-        controls_panel = ttk.Frame(self.preview_tab, style="Panel.TFrame", width=270)
+        controls_panel = ttk.Frame(self.preview_tab, style="Panel.TFrame", width=CONTROL_PANEL_WIDTH)
         controls_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         controls_panel.grid_propagate(False)
         controls_panel.rowconfigure(0, weight=1)
@@ -2623,7 +2624,7 @@ class ThumbnailScraperApp(tk.Tk):
         self.search_button.pack(fill="x")
         ttk.Label(controls, text="Artwork").pack(anchor="w", pady=(12, 4))
         ttk.Button(controls, text="Use Local Image…", command=self.choose_preview_local).pack(fill="x", pady=(4, 0))
-        self.add_to_custom_button = ttk.Button(controls, text="Add to Custom Art", command=self.add_preview_to_custom)
+        self.add_to_custom_button = ttk.Button(controls, text="Add to Custom Pack", command=self.add_preview_to_custom)
         self.add_to_custom_button.pack(fill="x", pady=(4, 0))
         self.add_exception_button = ttk.Button(controls, text="Add GBA Exception", command=self.add_exception)
         self.add_exception_button.pack(fill="x", pady=(4, 0))
