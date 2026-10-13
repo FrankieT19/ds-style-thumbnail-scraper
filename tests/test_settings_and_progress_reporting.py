@@ -76,7 +76,7 @@ class SettingsAndProgressTests(unittest.TestCase):
 
         app.queue_operation_progress(
             "sd_scan_progress_window",
-            "Matching installed games",
+            "Matching found games",
             4,
             10,
             "Game Boy: Tetris.gb",
@@ -84,9 +84,9 @@ class SettingsAndProgressTests(unittest.TestCase):
 
         self.assertEqual(
             window.calls,
-            [("Matching installed games", 4, 10, "Game Boy: Tetris.gb")],
+            [("Matching found games", 4, 10, "Game Boy: Tetris.gb")],
         )
-        self.assertEqual(status.get(), "Matching installed games — Game Boy: Tetris.gb")
+        self.assertEqual(status.get(), "Matching found games — Game Boy: Tetris.gb")
 
     def test_sd_file_enumeration_reports_folder_and_rom_counts(self):
         app = object.__new__(APP_MODULE.ThumbnailScraperApp)
