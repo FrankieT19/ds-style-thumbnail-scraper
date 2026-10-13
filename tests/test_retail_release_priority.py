@@ -55,6 +55,12 @@ class RetailReleasePriorityTests(unittest.TestCase):
             with self.subTest(variant=variant):
                 self.assertGreater(APP_MODULE.variant_rank(variant), 0)
 
+    def test_region_markers_are_case_insensitive_and_require_word_boundaries(self):
+        self.assertEqual(APP_MODULE.title_regions("Tetris (uSa)"), {"USA"})
+        self.assertEqual(APP_MODULE.title_regions("Tetris (eUrOpE)"), {"Europe"})
+        self.assertEqual(APP_MODULE.title_regions("Japanese Garden"), {"Other"})
+        self.assertEqual(APP_MODULE.title_regions("Europeans"), {"Other"})
+
     def test_libretro_returns_retail_match_before_beta_when_limit_is_one(self):
         app = SimpleNamespace()
         providers = APP_MODULE.Providers(app)

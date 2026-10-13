@@ -37,6 +37,25 @@ def png_bytes(color):
 
 
 class LocalPackPriorityTests(unittest.TestCase):
+    def test_parent_variant_named_folders_do_not_penalize_retail_art(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            retail = root / "GBA" / "Demos" / "Tetris.png"
+            demo = root / "GBA" / "Box Art" / "Tetris (Demo).png"
+            retail.parent.mkdir(parents=True)
+            demo.parent.mkdir(parents=True)
+            retail.write_bytes(png_bytes((10, 200, 10)))
+            demo.write_bytes(png_bytes((200, 10, 10)))
+            app = SimpleNamespace(
+                local_pack_var=Value(str(root)), region_allowed=lambda _title: True,
+                region_priority=lambda _title: 0,
+            )
+            results = APP_MODULE.Providers(app).search_local_pack_many(
+                "Tetris", max_results=2, system="Game Boy Advance"
+            )
+            self.assertTrue(results)
+            self.assertEqual(results[0].image_data, retail.read_bytes())
+
     def test_local_pack_scopes_to_console_folder_through_arbitrary_nesting_and_reads_only(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "large media collection"

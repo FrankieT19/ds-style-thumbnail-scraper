@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import urllib.error
 from dataclasses import dataclass
@@ -60,9 +59,9 @@ def choose_preferred_art(candidates: list[ArtFile]) -> ArtFile:
     return sorted(
         candidates,
         key=lambda art: (
-            "(Alt)" in art.path.name,
-            "(USA)" not in art.path.name,
-            art.path.name,
+            "(alt)" in art.path.name.casefold(),
+            "(usa)" not in art.path.name.casefold(),
+            art.path.name.casefold(),
         ),
     )[0]
 
@@ -79,11 +78,11 @@ def find_best_art(title: str, art_index: dict[str, list[ArtFile]]) -> ArtFile | 
     for candidates in art_index.values():
         art = choose_preferred_art(candidates)
         score = title_match_score(title, art.title)
-        if "(USA)" in art.path.name:
+        if "(usa)" in art.path.name.casefold():
             score += 0.35
         if art.is_europe:
             score -= 0.1
-        if "(Alt)" in art.path.name:
+        if "(alt)" in art.path.name.casefold():
             score -= 0.15
         if score > best_score:
             best_score = score
@@ -127,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         primary_art_files, europe_art_files = iter_art_files(pack_root)
         library = load_gba_library(cache_path, refresh=args.refresh_index)
-    except (ValueError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+    except (ValueError, LookupError, OSError, urllib.error.URLError, TimeoutError) as exc:
         print(f"Could not prepare conversion: {exc}", file=sys.stderr)
         return 2
 

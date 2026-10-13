@@ -28,6 +28,7 @@ from thumbnail_output_paths import infer_relative_rom_path, mirrored_thumbnail_p
 from thumbnail_image_data import is_valid_image_data, is_valid_image_file
 from thumbnail_rendering import fit_image_to_canvas, should_fit_art
 from rom_matching import compute_rom_hashes, strip_nointro_tags
+from json_cache import write_json_atomic
 
 from ezflash_gba_thumbs import (
     app_dir,
@@ -451,15 +452,18 @@ def fetch_bytes(url: str, headers: dict[str, str] | None = None) -> bytes:
 
 
 def title_regions(title: str) -> set[str]:
+    # Region names count only as complete words, avoiding titles such as
+    # "Europeans" or "Japanese Garden" being treated as regional releases.
+    value = str(title or "").casefold()
     regions: set[str] = set()
-    if "USA" in title:
+    if re.search(r"\b(?:usa|us)\b", value):
         regions.add("USA")
-    if "Europe" in title:
+    if re.search(r"\b(?:europe|eu)\b", value):
         regions.add("Europe")
-    if "Japan" in title:
+    if re.search(r"\b(?:japan|jp)\b", value):
         regions.add("Japan")
-    other_markers = ("Australia", "World", "China", "Korea", "Asia", "Taiwan", "Hong Kong")
-    if any(marker in title for marker in other_markers):
+    other_markers = ("australia", "world", "china", "korea", "asia", "taiwan", "hong kong")
+    if any(re.search(rf"\b{re.escape(marker)}\b", value) for marker in other_markers):
         regions.add("Other")
     return regions or {"Other"}
 
@@ -561,19 +565,29 @@ def load_libretro_source_index(
     refresh: bool = False,
 ) -> list[str]:
     if cache_path.exists() and not refresh:
-        cached_names = json.loads(cache_path.read_text(encoding="utf-8"))
-        if isinstance(cached_names, list) and cached_names:
-            return cached_names
+        try:
+            cached_names = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(cached_names, list) and cached_names and all(
+                isinstance(name, str) and name.lower().endswith(".png") for name in cached_names
+            ):
+                return cached_names
+        except (OSError, ValueError, TypeError):
+            pass
     data = json.loads(http_get(libretro_tree_url(system)).decode("utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("tree"), list):
+        raise ValueError("Libretro returned an invalid thumbnail index")
     prefix = f"{folder}/"
     names = sorted(
         Path(item["path"]).name
         for item in data.get("tree", [])
-        if item.get("path", "").startswith(prefix)
-        and item.get("path", "").lower().endswith(".png")
+        if isinstance(item, dict)
+        and isinstance(item.get("path"), str)
+        and item["path"].startswith(prefix)
+        and item["path"].lower().endswith(".png")
     )
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps(names, indent=2), encoding="utf-8")
+    if not names:
+        raise LookupError(f"Libretro returned no artwork entries for {system}/{folder}")
+    write_json_atomic(cache_path, names)
     return names
 
 
@@ -1324,7 +1338,9 @@ class Providers:
                 candidates.append((score, art))
         candidates.sort(
             key=lambda item: (
-                variant_rank(str(item[1].path)),
+                # Parent directories describe pack organization, not the
+                # release represented by this image.
+                variant_rank(item[1].path.name),
                 self.app.region_priority(self.local_art_region_text(item[1])),
                 -item[0],
                 item[1].path.name.casefold(),

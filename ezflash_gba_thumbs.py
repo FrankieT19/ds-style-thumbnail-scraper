@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Iterable
 
 from PIL import Image, ImageOps
+from json_cache import write_json_atomic
 
 
 LIBRETRO_API = (
@@ -95,19 +96,29 @@ def http_get(url: str) -> bytes:
 
 def load_libretro_index(cache_path: Path, refresh: bool = False) -> list[str]:
     if cache_path.exists() and not refresh:
-        cached_names = json.loads(cache_path.read_text(encoding="utf-8"))
-        if len(cached_names) > 1000:
-            return cached_names
+        try:
+            cached_names = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(cached_names, list) and len(cached_names) > 1000 and all(
+                isinstance(name, str) and name.lower().endswith(".png") for name in cached_names
+            ):
+                return cached_names
+        except (OSError, ValueError, TypeError):
+            pass
 
     data = json.loads(http_get(LIBRETRO_API).decode("utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("tree"), list):
+        raise ValueError("Libretro returned an invalid thumbnail index")
     names = sorted(
         Path(item["path"]).name
         for item in data.get("tree", [])
-        if item.get("path", "").startswith("Named_Boxarts/")
-        and item.get("path", "").lower().endswith(".png")
+        if isinstance(item, dict)
+        and isinstance(item.get("path"), str)
+        and item["path"].startswith("Named_Boxarts/")
+        and item["path"].lower().endswith(".png")
     )
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps(names, indent=2), encoding="utf-8")
+    if len(names) <= 1000:
+        raise LookupError("Libretro returned an incomplete GBA thumbnail index")
+    write_json_atomic(cache_path, names)
     return names
 
 
@@ -332,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         index = load_libretro_index(cache_path, refresh=args.refresh_index)
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, LookupError) as exc:
         print(f"Could not load online box-art index: {exc}", file=sys.stderr)
         return 2
 
