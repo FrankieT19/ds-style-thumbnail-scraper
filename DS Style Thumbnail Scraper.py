@@ -2474,19 +2474,19 @@ class ThumbnailScraperApp(tk.Tk):
         controls.bind("<Configure>", self._sync_build_controls_scroll_area)
 
         ttk.Label(controls, text="Pack Options", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(controls, text="Artwork source").pack(anchor="w", pady=(12, 4))
+        ttk.Label(controls, text="Artwork Source").pack(anchor="w", pady=(12, 4))
         build_provider_combo = ttk.Combobox(controls, textvariable=self.build_provider_var, values=self.available_artwork_sources(), postcommand=lambda: self.refresh_artwork_source_values(build_provider_combo), state="readonly", width=20)
         build_provider_combo.pack(anchor="w")
         build_provider_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_build_source_change())
-        ttk.Label(controls, text="Artwork type").pack(anchor="w", pady=(12, 4))
+        ttk.Label(controls, text="Artwork Type").pack(anchor="w", pady=(12, 4))
         source_combo = ttk.Combobox(controls, textvariable=self.build_libretro_source_var, values=list(LIBRETRO_SOURCE_FOLDERS), state="readonly", width=20)
         source_combo.pack(anchor="w")
         source_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_build_source_change())
-        ttk.Label(controls, text="Local pack").pack(anchor="w", pady=(12, 4))
+        ttk.Label(controls, text="Local Pack").pack(anchor="w", pady=(12, 4))
         ttk.Button(controls, text="Choose Folder…", command=self.choose_local_pack).pack(anchor="w", fill="x")
         self.local_pack_label = ttk.Label(controls, text="No local pack selected", style="Muted.TLabel", wraplength=210)
         self.local_pack_label.pack(anchor="w", pady=(6, 0))
-        ttk.Label(controls, text="Thumbnail size").pack(anchor="w", pady=(12, 4))
+        ttk.Label(controls, text="Thumbnail Size").pack(anchor="w", pady=(12, 4))
         build_size_combo = ttk.Combobox(controls, textvariable=self.size_var, values=["80x80", "120x80"], state="readonly", width=20)
         build_size_combo.pack(anchor="w")
         build_size_combo.bind("<<ComboboxSelected>>", lambda _event: (self.update_build_preview(), self.update_preview()))
@@ -2498,11 +2498,9 @@ class ThumbnailScraperApp(tk.Tk):
         self.cancel_build_button.pack_forget()
 
         ttk.Label(controls, text="Regions", style="Section.TLabel").pack(anchor="w", pady=(18, 0))
-        ttk.Label(controls, text="Game regions").pack(anchor="w", pady=(12, 4))
-        ttk.Label(controls, text="Choose regions to include in the pack.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
+        ttk.Label(controls, text="Game Regions").pack(anchor="w", pady=(12, 4))
         self._build_rom_region_control(controls)
-        ttk.Label(controls, text="Artwork priority").pack(anchor="w", pady=(12, 4))
-        ttk.Label(controls, text="Artwork is tried in order when a region has no match.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
+        ttk.Label(controls, text="Artwork Priority").pack(anchor="w", pady=(12, 4))
         self._build_region_order_control(controls, scope="build")
 
         middle = ttk.Frame(self.build_tab, style="Panel.TFrame")
@@ -2561,7 +2559,7 @@ class ThumbnailScraperApp(tk.Tk):
         controls.bind("<Configure>", self._sync_preview_controls_scroll_area)
         self.preview_controls_frame = controls
         ttk.Label(controls, text="Search", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(controls, text="Artwork source").pack(anchor="w", pady=(10, 4))
+        ttk.Label(controls, text="Artwork Source").pack(anchor="w", pady=(10, 4))
         preview_provider_combo = ttk.Combobox(controls, textvariable=self.preview_provider_var, values=self.available_artwork_sources(), postcommand=lambda: self.refresh_artwork_source_values(preview_provider_combo), state="readonly", width=24)
         preview_provider_combo.pack(anchor="w")
         preview_provider_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_preview_source_change())
@@ -2575,23 +2573,22 @@ class ThumbnailScraperApp(tk.Tk):
         )
         self.preview_system_combo.pack(anchor="w")
         self.preview_system_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_preview_system_change())
-        ttk.Label(controls, text="Artwork type").pack(anchor="w", pady=(12, 4))
+        ttk.Label(controls, text="Artwork Type").pack(anchor="w", pady=(12, 4))
         preview_source_combo = ttk.Combobox(controls, textvariable=self.preview_libretro_source_var, values=list(LIBRETRO_SOURCE_FOLDERS), state="readonly", width=24)
         preview_source_combo.pack(anchor="w")
         preview_source_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_preview_source_change())
         ttk.Button(controls, text="Choose Local Pack…", command=self.choose_local_pack).pack(fill="x", pady=(10, 0))
-        ttk.Label(controls, text="Thumbnail size").pack(anchor="w", pady=(12, 4))
+        ttk.Label(controls, text="Thumbnail Size").pack(anchor="w", pady=(12, 4))
         size_combo = ttk.Combobox(controls, textvariable=self.size_var, values=["80x80", "120x80"], state="readonly", width=24)
         size_combo.pack(anchor="w")
         size_combo.bind("<<ComboboxSelected>>", lambda _event: self.update_preview())
-        ttk.Label(controls, text="Artwork priority").pack(anchor="w", pady=(12, 4))
-        ttk.Label(controls, text="Set the order of artwork results.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
+        ttk.Label(controls, text="Artwork Priority").pack(anchor="w", pady=(12, 4))
         self._build_region_order_control(controls, scope="preview")
         ttk.Label(controls, text="Game").pack(anchor="w", pady=(12, 4))
         self.search_entry = ttk.Entry(controls, textvariable=self.search_var, width=30)
         self.search_entry.pack(fill="x", pady=(4, 4))
         self.search_entry.bind("<KeyRelease>", self.update_suggestions)
-        ttk.Label(controls, text="Games without artwork matches").pack(anchor="w", pady=(10, 4))
+        ttk.Label(controls, text="Games Without Artwork Matches").pack(anchor="w", pady=(10, 4))
         self.sd_scan_game_var = tk.StringVar(value="")
         self.sd_scan_game_combo = ttk.Combobox(
             controls, textvariable=self.sd_scan_game_var, state="readonly", width=30,
@@ -2774,14 +2771,14 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Button(actions, text="Add Name…", command=self.add_custom_name).pack(anchor="w", fill="x", pady=(0, 8))
         ttk.Button(actions, text="Set Image…", command=self.set_custom_image).pack(anchor="w", fill="x", pady=(0, 8))
         ttk.Button(actions, text="Remove Selected", command=self.remove_custom_roms).pack(anchor="w", fill="x", pady=(0, 16))
-        ttk.Label(actions, text="Thumbnail size").pack(anchor="w")
+        ttk.Label(actions, text="Thumbnail Size").pack(anchor="w")
         custom_size_combo = ttk.Combobox(actions, textvariable=self.size_var, values=["80x80", "120x80"], state="readonly", width=18)
         custom_size_combo.pack(anchor="w", fill="x", pady=(4, 12))
         custom_size_combo.bind("<<ComboboxSelected>>", lambda _event: self.apply_custom_size_to_selection())
         ttk.Label(actions, text="Name (Custom)").pack(anchor="w")
         self.custom_code_var = tk.StringVar()
         ttk.Entry(actions, textvariable=self.custom_code_var, width=22).pack(anchor="w", fill="x", pady=(4, 8))
-        ttk.Label(actions, text="Output layout").pack(anchor="w")
+        ttk.Label(actions, text="Output Layout").pack(anchor="w")
         custom_layout_combo = ttk.Combobox(
             actions,
             textvariable=self.custom_output_layout_var,
@@ -2825,7 +2822,7 @@ class ThumbnailScraperApp(tk.Tk):
             command=self.build_custom_rom_output,
         )
         self.build_custom_art_button.pack(side="left")
-        ttk.Label(custom_footer, text="for").pack(side="left", padx=(8, 6))
+        ttk.Label(custom_footer, text="For").pack(side="left", padx=(8, 6))
         self.custom_build_system_combo = ttk.Combobox(
             custom_footer,
             textvariable=self.custom_build_system_var,
@@ -3885,7 +3882,7 @@ class ThumbnailScraperApp(tk.Tk):
             style="Muted.TLabel",
             wraplength=480,
         ).grid(row=1, column=0, columnspan=2, sticky="w", padx=18, pady=(0, 14))
-        ttk.Label(dialog, text="Artwork type").grid(row=2, column=0, sticky="w", padx=(18, 8), pady=5)
+        ttk.Label(dialog, text="Artwork Type").grid(row=2, column=0, sticky="w", padx=(18, 8), pady=5)
         source_var = tk.StringVar(value="Box Art")
         ttk.Combobox(
             dialog,
@@ -3894,7 +3891,7 @@ class ThumbnailScraperApp(tk.Tk):
             state="readonly",
             width=24,
         ).grid(row=2, column=1, sticky="ew", padx=(8, 18), pady=5)
-        ttk.Label(dialog, text="Thumbnail sizes").grid(row=3, column=0, sticky="w", padx=(18, 8), pady=5)
+        ttk.Label(dialog, text="Thumbnail Sizes").grid(row=3, column=0, sticky="w", padx=(18, 8), pady=5)
         sizes_var = tk.StringVar(value="Wide and square")
         ttk.Combobox(
             dialog,
