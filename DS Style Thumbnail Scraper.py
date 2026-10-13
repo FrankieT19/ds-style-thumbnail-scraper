@@ -765,7 +765,7 @@ class OperationProgressWindow:
             if not self.window.winfo_exists():
                 return
             self.heading_var.set(heading)
-            self.detail_var.set(detail or "Please wait...")
+            self.detail_var.set(detail or "Please wait…")
             if current is not None and total is not None and total > 0:
                 if self._progress_mode != "determinate":
                     self.progress_bar.stop()
@@ -2066,6 +2066,8 @@ class ThumbnailScraperApp(tk.Tk):
         self.providers = Providers(self)
         self.current_result: ProviderResult | None = None
         self.result_options: list[ProviderResult] = []
+        self.sd_scan_unmatched_games: list[dict[str, str]] = []
+        self.active_sd_scan_game: dict[str, str] | None = None
         self.current_source_image: Image.Image | None = None
         self.build_result: ProviderResult | None = None
         self.build_source_image: Image.Image | None = None
@@ -2314,7 +2316,7 @@ class ThumbnailScraperApp(tk.Tk):
         region_list.grid(row=0, column=0, rowspan=3, sticky="nsw")
         ttk.Button(frame, text="Move Up", command=lambda lb=region_list, tab_scope=scope: self.move_region(lb, -1, tab_scope)).grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=(0, 4))
         ttk.Button(frame, text="Move Down", command=lambda lb=region_list, tab_scope=scope: self.move_region(lb, 1, tab_scope)).grid(row=1, column=1, sticky="ew", padx=(8, 0))
-        ttk.Button(frame, text="Enable/Disable", command=lambda lb=region_list, tab_scope=scope: self.toggle_region(lb, tab_scope)).grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
+        ttk.Button(frame, text="Toggle Region", command=lambda lb=region_list, tab_scope=scope: self.toggle_region(lb, tab_scope)).grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
         region_list.bind("<space>", lambda _event, lb=region_list, tab_scope=scope: self.toggle_region(lb, tab_scope))
         region_list.bind("<Double-Button-1>", lambda _event, lb=region_list, tab_scope=scope: self.toggle_region(lb, tab_scope))
         self.region_listboxes.append(region_list)
@@ -2352,7 +2354,7 @@ class ThumbnailScraperApp(tk.Tk):
         title_box = ttk.Frame(header, style="TFrame")
         title_box.pack(side="left", fill="x", expand=True)
         ttk.Label(title_box, text=APP_NAME, style="Title.TLabel").pack(anchor="w")
-        ttk.Label(title_box, text="Build DS Style thumbnail artwork from online or local images.", style="Sub.TLabel").pack(anchor="w", pady=(3, 0))
+        ttk.Label(title_box, text="Find, preview, and build DS Style artwork.", style="Sub.TLabel").pack(anchor="w", pady=(3, 0))
         version_box = ttk.Frame(header, style="TFrame")
         version_box.pack(side="right", anchor="n")
         ttk.Label(version_box, text=f"DS Style Thumbnail Scraper v{APP_VERSION}", style="HeaderVersion.TLabel").pack(anchor="e")
@@ -2426,16 +2428,16 @@ class ThumbnailScraperApp(tk.Tk):
         region_options.pack(side="left", fill="y")
 
         ttk.Label(source_options, text="Pack Options", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(source_options, text="Main source").pack(anchor="w", pady=(14, 4))
+        ttk.Label(source_options, text="Artwork source").pack(anchor="w", pady=(14, 4))
         build_provider_combo = ttk.Combobox(source_options, textvariable=self.build_provider_var, values=PROVIDER_VALUES, state="readonly", width=20)
         build_provider_combo.pack(anchor="w")
         build_provider_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_build_source_change())
-        ttk.Label(source_options, text="Libretro source").pack(anchor="w", pady=(14, 4))
+        ttk.Label(source_options, text="Artwork type").pack(anchor="w", pady=(14, 4))
         source_combo = ttk.Combobox(source_options, textvariable=self.build_libretro_source_var, values=list(LIBRETRO_SOURCE_FOLDERS), state="readonly", width=20)
         source_combo.pack(anchor="w")
         source_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_build_source_change())
         ttk.Label(source_options, text="Local pack").pack(anchor="w", pady=(14, 4))
-        ttk.Button(source_options, text="Choose Folder...", command=self.choose_local_pack).pack(anchor="w")
+        ttk.Button(source_options, text="Choose Folder…", command=self.choose_local_pack).pack(anchor="w")
         self.local_pack_label = ttk.Label(source_options, text="No local pack selected", style="Muted.TLabel", wraplength=190)
         self.local_pack_label.pack(anchor="w", pady=(6, 0))
         ttk.Label(source_options, text="Thumbnail size").pack(anchor="w", pady=(14, 4))
@@ -2445,30 +2447,30 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Checkbutton(source_options, text="Build exceptions only", variable=self.exceptions_only_var).pack(anchor="w", pady=(14, 0))
         self.build_button = ttk.Button(source_options, text="Build Thumbnail Pack", style="Accent.TButton", command=self.build_pack)
         self.build_button.pack(anchor="w", pady=(22, 0))
-        self.cancel_build_button = ttk.Button(source_options, text="Cancel Building", command=self.cancel_build)
+        self.cancel_build_button = ttk.Button(source_options, text="Cancel Build", command=self.cancel_build)
         self.cancel_build_button.pack(anchor="w", pady=(8, 0))
         self.cancel_build_button.pack_forget()
 
         ttk.Label(region_options, text="Regions", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(region_options, text="Game regions to build").pack(anchor="w", pady=(14, 4))
-        ttk.Label(region_options, text="Choose which game regions your pack should support.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
+        ttk.Label(region_options, text="Game regions").pack(anchor="w", pady=(14, 4))
+        ttk.Label(region_options, text="Choose regions to include in the pack.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
         self._build_rom_region_control(region_options)
         ttk.Label(region_options, text="Artwork priority").pack(anchor="w", pady=(14, 4))
-        ttk.Label(region_options, text="Choose the order artwork is tried in. If the first region is missing, the next available one is used.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
+        ttk.Label(region_options, text="Artwork is tried in order when a region has no match.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
         self._build_region_order_control(region_options, scope="build")
 
         middle = ttk.Frame(self.build_tab, style="Panel.TFrame")
         middle.pack(side="left", fill="y", padx=(0, 18))
-        ttk.Label(middle, text="Current Look", style="Section.TLabel").pack(anchor="w")
-        self.build_preview_label = tk.Label(middle, bg="#101a29", fg="#aebfd2", text="Loading preview...", width=42, height=12, font=("Segoe UI", 10))
+        ttk.Label(middle, text="Preview", style="Section.TLabel").pack(anchor="w")
+        self.build_preview_label = tk.Label(middle, bg="#101a29", fg="#aebfd2", text="Loading preview…", width=42, height=12, font=("Segoe UI", 10))
         self.build_preview_label.pack(anchor="w", pady=(10, 8))
-        self.build_preview_info = ttk.Label(middle, text="Loading current look...", style="Muted.TLabel", wraplength=280)
+        self.build_preview_info = ttk.Label(middle, text="Loading preview…", style="Muted.TLabel", wraplength=280)
         self.build_preview_info.pack(anchor="w")
         self.build_preview_loading = ttk.Progressbar(middle, mode="indeterminate", length=180)
         self.build_preview_loading.pack(anchor="w", pady=(6, 0))
         self.build_preview_loading.pack_forget()
         self._build_preview_spinner_running = False
-        self.build_pack_crop_label = ttk.Label(middle, text="Pack Crop", style="Section.TLabel")
+        self.build_pack_crop_label = ttk.Label(middle, text="Preview Crop", style="Section.TLabel")
         self.build_pack_crop_label.pack(anchor="w", pady=(16, 6))
         for label, var, from_, to in (("Zoom", self.build_zoom_var, 1.0, 3.0), ("Move X", self.build_crop_x_var, -100, 100), ("Move Y", self.build_crop_y_var, -100, 100)):
             ttk.Label(middle, text=label).pack(anchor="w")
@@ -2491,11 +2493,11 @@ class ThumbnailScraperApp(tk.Tk):
         controls = ttk.Frame(self.preview_tab, style="Panel.TFrame")
         controls.grid(row=0, column=0, sticky="nsw", padx=(0, 24))
         ttk.Label(controls, text="Search", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(controls, text="Source").pack(anchor="w", pady=(10, 4))
+        ttk.Label(controls, text="Artwork source").pack(anchor="w", pady=(10, 4))
         preview_provider_combo = ttk.Combobox(controls, textvariable=self.preview_provider_var, values=PROVIDER_VALUES, state="readonly", width=24)
         preview_provider_combo.pack(anchor="w")
         preview_provider_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_preview_source_change())
-        ttk.Label(controls, text="System / console").pack(anchor="w", pady=(12, 4))
+        ttk.Label(controls, text="System").pack(anchor="w", pady=(12, 4))
         self.preview_system_combo = ttk.Combobox(
             controls,
             textvariable=self.preview_system_var,
@@ -2505,22 +2507,39 @@ class ThumbnailScraperApp(tk.Tk):
         )
         self.preview_system_combo.pack(anchor="w")
         self.preview_system_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_preview_system_change())
-        ttk.Label(controls, text="Libretro source").pack(anchor="w", pady=(12, 4))
+        ttk.Label(controls, text="Artwork type").pack(anchor="w", pady=(12, 4))
         preview_source_combo = ttk.Combobox(controls, textvariable=self.preview_libretro_source_var, values=list(LIBRETRO_SOURCE_FOLDERS), state="readonly", width=24)
         preview_source_combo.pack(anchor="w")
         preview_source_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_preview_source_change())
-        ttk.Button(controls, text="Choose Local Pack...", command=self.choose_local_pack).pack(anchor="w", pady=(10, 0))
+        ttk.Button(controls, text="Choose Local Pack…", command=self.choose_local_pack).pack(anchor="w", pady=(10, 0))
         ttk.Label(controls, text="Thumbnail size").pack(anchor="w", pady=(12, 4))
         size_combo = ttk.Combobox(controls, textvariable=self.size_var, values=["80x80", "120x80"], state="readonly", width=24)
         size_combo.pack(anchor="w")
         size_combo.bind("<<ComboboxSelected>>", lambda _event: self.update_preview())
         ttk.Label(controls, text="Artwork priority").pack(anchor="w", pady=(12, 4))
-        ttk.Label(controls, text="Choose the order artwork appears in preview results.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
+        ttk.Label(controls, text="Set the order of artwork results.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
         self._build_region_order_control(controls, scope="preview")
         ttk.Label(controls, text="Game").pack(anchor="w", pady=(12, 4))
         self.search_entry = ttk.Entry(controls, textvariable=self.search_var, width=34)
         self.search_entry.pack(anchor="w", pady=(10, 4))
         self.search_entry.bind("<KeyRelease>", self.update_suggestions)
+        ttk.Label(controls, text="Games without artwork matches").pack(anchor="w", pady=(10, 4))
+        self.sd_scan_game_var = tk.StringVar(value="")
+        self.sd_scan_game_combo = ttk.Combobox(
+            controls, textvariable=self.sd_scan_game_var, state="readonly", width=34,
+        )
+        self.sd_scan_game_combo.pack(anchor="w")
+        self.sd_scan_game_combo.bind("<<ComboboxSelected>>", self.choose_sd_scan_game)
+        self.import_sd_scan_report_button = ttk.Button(
+            controls, text="Import Scan Report…", command=self.import_sd_scan_report,
+        )
+        self.import_sd_scan_report_button.pack(anchor="w", pady=(4, 0))
+        self.clear_sd_scan_games_button = ttk.Button(
+            controls, text="Clear Unmatched Games", command=self.clear_sd_scan_games,
+        )
+        self.clear_sd_scan_games_button.pack(anchor="w", pady=(4, 0))
+        self.clear_sd_scan_games_button.configure(state="disabled")
+        self.search_entry.bind("<KeyPress>", self.clear_active_sd_scan_game, add="+")
         self.suggestion_box = tk.Listbox(
             controls,
             height=6,
@@ -2535,18 +2554,18 @@ class ThumbnailScraperApp(tk.Tk):
         )
         self.suggestion_box.bind("<<ListboxSelect>>", self.choose_suggestion)
         self.suggestion_box.bind("<Return>", self.choose_suggestion)
-        self.search_button = ttk.Button(controls, text="Fetch Preview", style="Accent.TButton", command=self.preview_search)
+        self.search_button = ttk.Button(controls, text="Search Artwork", style="Accent.TButton", command=self.preview_search)
         self.search_button.pack(anchor="w")
         ttk.Label(controls, text="Artwork").pack(anchor="w", pady=(12, 4))
-        ttk.Button(controls, text="Use Local Image...", command=self.choose_preview_local).pack(anchor="w", pady=(8, 0))
-        self.add_to_custom_button = ttk.Button(controls, text="Add To Custom Art", command=self.add_preview_to_custom)
+        ttk.Button(controls, text="Use Local Image…", command=self.choose_preview_local).pack(anchor="w", pady=(8, 0))
+        self.add_to_custom_button = ttk.Button(controls, text="Add to Custom Art", command=self.add_preview_to_custom)
         self.add_to_custom_button.pack(anchor="w", pady=(8, 0))
-        self.add_exception_button = ttk.Button(controls, text="Add As GBA Exception", command=self.add_exception)
+        self.add_exception_button = ttk.Button(controls, text="Add GBA Exception", command=self.add_exception)
         self.add_exception_button.pack(anchor="w", pady=(8, 0))
 
         preview = ttk.Frame(self.preview_tab, style="Panel.TFrame")
         preview.grid(row=0, column=1, sticky="nsew", padx=(0, 20))
-        ttk.Label(preview, text="Thumbnail Preview", style="Section.TLabel").pack(anchor="w")
+        ttk.Label(preview, text="Preview", style="Section.TLabel").pack(anchor="w")
         self.preview_label = tk.Label(preview, bg="#101a29", width=420, height=300)
         self.preview_label.pack(pady=(12, 0), anchor="nw")
         self.preview_info = ttk.Label(preview, text="", style="Muted.TLabel")
@@ -2566,7 +2585,7 @@ class ThumbnailScraperApp(tk.Tk):
         results = ttk.Frame(self.preview_tab, style="Panel.TFrame", width=360)
         results.grid(row=0, column=2, sticky="nsw")
         results.grid_propagate(False)
-        ttk.Label(results, text="Provider Results", style="Section.TLabel").pack(anchor="w")
+        ttk.Label(results, text="Search Results", style="Section.TLabel").pack(anchor="w")
         gallery_box = tk.Frame(results, bg="#152235", highlightthickness=0, bd=0)
         gallery_box.pack(fill="both", expand=True, anchor="w", pady=(12, 0))
         gallery_box.rowconfigure(0, weight=1)
@@ -2587,10 +2606,10 @@ class ThumbnailScraperApp(tk.Tk):
     def _build_custom_tab(self):
         self.custom_tab.columnconfigure(0, weight=1)
         self.custom_tab.rowconfigure(2, weight=1)
-        ttk.Label(self.custom_tab, text="Custom Thumbnail Overrides", style="Section.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(self.custom_tab, text="Artwork Entries", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(
             self.custom_tab,
-            text="Create artwork that mirrors your ROM folders, or use the legacy CUSTOM layout. Scan from the SD root to preserve console and alphabet folders; ROM files are never edited.",
+            text="Add artwork for games on your SD card. Mirrored folders preserve ROM paths; Legacy CUSTOM uses a flat folder. ROM files are never changed.",
             style="Muted.TLabel",
             wraplength=760,
         ).grid(row=1, column=0, sticky="w", pady=(8, 14))
@@ -2607,7 +2626,7 @@ class ThumbnailScraperApp(tk.Tk):
         list_area.rowconfigure(0, weight=1)
         list_area.columnconfigure(0, weight=1)
         self.custom_tree = ttk.Treeview(list_area, columns=("name", "source", "size", "image"), show="headings", height=11, selectmode="extended")
-        for column, text, width in (("name", "Thumbnail name", 230), ("source", "System", 120), ("size", "Size", 76), ("image", "Image", 170)):
+        for column, text, width in (("name", "Artwork name", 230), ("source", "System", 120), ("size", "Size", 76), ("image", "Image", 170)):
             self.custom_tree.heading(column, text=text)
             self.custom_tree.column(column, width=width, stretch=True)
         custom_ybar = ttk.Scrollbar(list_area, orient="vertical", command=self.custom_tree.yview)
@@ -2626,21 +2645,21 @@ class ThumbnailScraperApp(tk.Tk):
 
         actions = ttk.Frame(body, style="Panel.TFrame")
         actions.grid(row=0, column=1, sticky="n", padx=(0, 24))
-        self.scan_sd_button = ttk.Button(actions, text="Scan SD Card...", style="Accent.TButton", command=self.scan_sd_card)
+        self.scan_sd_button = ttk.Button(actions, text="Scan SD Card…", style="Accent.TButton", command=self.scan_sd_card)
         self.scan_sd_button.pack(anchor="w", fill="x", pady=(0, 12))
-        ttk.Button(actions, text="Add File...", command=self.add_custom_roms).pack(anchor="w", fill="x", pady=(0, 8))
-        ttk.Button(actions, text="Enter Name...", command=self.add_custom_name).pack(anchor="w", fill="x", pady=(0, 8))
-        ttk.Button(actions, text="Set Image...", command=self.set_custom_image).pack(anchor="w", fill="x", pady=(0, 8))
+        ttk.Button(actions, text="Add ROMs…", command=self.add_custom_roms).pack(anchor="w", fill="x", pady=(0, 8))
+        ttk.Button(actions, text="Add Name…", command=self.add_custom_name).pack(anchor="w", fill="x", pady=(0, 8))
+        ttk.Button(actions, text="Set Image…", command=self.set_custom_image).pack(anchor="w", fill="x", pady=(0, 8))
         ttk.Button(actions, text="Remove Selected", command=self.remove_custom_roms).pack(anchor="w", fill="x", pady=(0, 16))
         ttk.Label(actions, text="Thumbnail size").pack(anchor="w")
         custom_size_combo = ttk.Combobox(actions, textvariable=self.size_var, values=["80x80", "120x80"], state="readonly", width=18)
         custom_size_combo.pack(anchor="w", fill="x", pady=(4, 12))
         custom_size_combo.bind("<<ComboboxSelected>>", lambda _event: self.apply_custom_size_to_selection())
-        ttk.Label(actions, text="Selected name").pack(anchor="w")
+        ttk.Label(actions, text="Name (Legacy CUSTOM)").pack(anchor="w")
         self.custom_code_var = tk.StringVar()
         ttk.Entry(actions, textvariable=self.custom_code_var, width=22).pack(anchor="w", fill="x", pady=(4, 8))
-        ttk.Label(actions, text="CUSTOM art uses this name. Mirror mode always matches the actual ROM filename and folder path.", style="Muted.TLabel", wraplength=170).pack(anchor="w", pady=(0, 4))
-        ttk.Label(actions, text="Artwork output layout").pack(anchor="w")
+        ttk.Label(actions, text="Mirrored artwork uses the ROM filename and folder path.", style="Muted.TLabel", wraplength=170).pack(anchor="w", pady=(0, 4))
+        ttk.Label(actions, text="Output layout").pack(anchor="w")
         custom_layout_combo = ttk.Combobox(
             actions,
             textvariable=self.custom_output_layout_var,
@@ -2652,7 +2671,7 @@ class ThumbnailScraperApp(tk.Tk):
         custom_layout_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_custom_output_layout_changed())
         ttk.Label(
             actions,
-            text="Mirror mode avoids the CUSTOM 256-image limit. Name-only defaults (gb.bmp, nes.bmp, etc.) stay in CUSTOM.",
+            text="Mirror ROM folders to avoid the 256-image limit. System defaults (gb.bmp, nes.bmp) stay in CUSTOM.",
             style="Muted.TLabel",
             wraplength=170,
         ).pack(anchor="w", pady=(0, 8))
@@ -2661,11 +2680,11 @@ class ThumbnailScraperApp(tk.Tk):
         right = ttk.Frame(body, style="Panel.TFrame")
         right.grid(row=0, column=2, sticky="nw")
         right.columnconfigure(0, weight=1)
-        ttk.Label(right, text="Selected Preview", style="Section.TLabel").pack(anchor="w")
+        ttk.Label(right, text="Entry Preview", style="Section.TLabel").pack(anchor="w")
         self.custom_preview_label = tk.Label(right, bg="#101a29", width=300, height=210)
         self.custom_preview_label.pack_propagate(False)
         self.custom_preview_label.pack(anchor="w", pady=(8, 6))
-        self.custom_preview_info = ttk.Label(right, text="Choose a file or name and image", style="Muted.TLabel", wraplength=340)
+        self.custom_preview_info = ttk.Label(right, text="Select an entry to preview its image.", style="Muted.TLabel", wraplength=340)
         self.custom_preview_info.pack(anchor="w")
         crop_row = ttk.Frame(right, style="Panel.TFrame")
         crop_row.pack(anchor="w", pady=(12, 0))
@@ -2679,7 +2698,7 @@ class ThumbnailScraperApp(tk.Tk):
         custom_footer.grid(row=3, column=0, sticky="ew", pady=(12, 0))
         self.build_custom_art_button = ttk.Button(
             custom_footer,
-            text="Build Custom Art",
+            text="Build Art Pack",
             style="Accent.TButton",
             command=self.build_custom_rom_output,
         )
@@ -2712,8 +2731,8 @@ class ThumbnailScraperApp(tk.Tk):
             ("Local pack folder", self.local_pack_var, "folder", False),
             ("IGDB Client ID", self.igdb_client_var, None, False),
             ("IGDB Client Secret", self.igdb_secret_var, "igdb_secret", True),
-            ("TheGamesDB API key (fallback #1)", self.tgdb_key_var, "thegamesdb", True),
-            ("ScreenScraper developer ID (fallback #2)", self.ss_dev_id_var, "screenscraper", False),
+            ("TheGamesDB API key", self.tgdb_key_var, "thegamesdb", True),
+            ("ScreenScraper developer ID", self.ss_dev_id_var, "screenscraper", False),
             ("ScreenScraper developer password", self.ss_dev_pass_var, "ss_dev_pass", True),
             ("ScreenScraper username (optional)", self.ss_user_var, None, False),
             ("ScreenScraper password (optional)", self.ss_pass_var, "ss_pass", True),
@@ -2730,7 +2749,7 @@ class ThumbnailScraperApp(tk.Tk):
                 )
                 ttk.Checkbutton(
                     self.settings_tab,
-                    text="Prefer matching local-pack art over existing caches and online/hash results",
+                    text="Prefer local-pack matches over cached or online artwork",
                     variable=self.local_pack_priority_var,
                     command=self.save_settings,
                 ).grid(row=row + 1, column=1, columnspan=2, sticky="w", padx=(10, 8), pady=(0, 6))
@@ -2746,7 +2765,7 @@ class ThumbnailScraperApp(tk.Tk):
                     self.tgdb_key_reveal_button = reveal
                     reveal.configure(command=self.toggle_tgdb_key_visibility)
                     self.tgdb_test_button = ttk.Button(
-                        self.settings_tab, text="Test key", command=self.test_thegamesdb_key
+                        self.settings_tab, text="Test Key", command=self.test_thegamesdb_key
                     )
                     self.tgdb_test_button.grid(row=row, column=2, sticky="w")
                 elif action == "igdb_secret":
@@ -2754,7 +2773,7 @@ class ThumbnailScraperApp(tk.Tk):
                     self.igdb_secret_reveal_button = reveal
                     reveal.configure(command=self.toggle_igdb_secret_visibility)
                     self.igdb_test_button = ttk.Button(
-                        self.settings_tab, text="Test IGDB", command=self.test_igdb_credentials_gui
+                        self.settings_tab, text="Test Credentials", command=self.test_igdb_credentials_gui
                     )
                     self.igdb_test_button.grid(row=row, column=2, sticky="w")
                 elif action == "ss_dev_pass":
@@ -2771,7 +2790,7 @@ class ThumbnailScraperApp(tk.Tk):
                 )
                 if action == "screenscraper":
                     self.ss_test_button = ttk.Button(
-                        self.settings_tab, text="Test ScreenScraper", command=self.test_screenscraper_credentials_gui
+                        self.settings_tab, text="Test Credentials", command=self.test_screenscraper_credentials_gui
                     )
                     self.ss_test_button.grid(row=row, column=2, sticky="w")
 
@@ -2779,10 +2798,10 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Label(
             self.settings_tab,
             text=(
-                "Automatic fallback order: Libretro → TheGamesDB → ScreenScraper → IGDB. "
-                "IGDB uses Twitch Client ID + Client Secret (the app requests/refreshes its own access token). "
-                "ScreenScraper requires developer credentials; user account credentials are optional, but must be entered together. "
-                "Providers without valid credentials or a matching platform are skipped."
+                "Fallback order: Libretro → TheGamesDB → ScreenScraper → IGDB. "
+                "IGDB uses your Twitch Client ID and Secret; the app handles access tokens. "
+                "ScreenScraper requires developer credentials. Account username and password are optional, but must be entered together. "
+                "Providers without valid credentials or a matching system are skipped."
             ),
             style="Muted.TLabel",
             wraplength=700,
@@ -2848,7 +2867,7 @@ class ThumbnailScraperApp(tk.Tk):
             return
         self.tgdb_test_button.configure(state="disabled")
         self.tgdb_test_progress_window = OperationProgressWindow(
-            self, "Test TheGamesDB API Key", "Contacting TheGamesDB to verify the key..."
+            self, "Test TheGamesDB API Key", "Contacting TheGamesDB to verify the key…"
         )
 
         def worker():
@@ -2908,7 +2927,7 @@ class ThumbnailScraperApp(tk.Tk):
         setattr(
             self,
             window_attribute,
-            OperationProgressWindow(self, f"Test {provider_name} Credentials", f"Contacting {provider_name}..."),
+            OperationProgressWindow(self, f"Test {provider_name} Credentials", f"Contacting {provider_name}…"),
         )
 
         def worker():
@@ -3073,7 +3092,7 @@ class ThumbnailScraperApp(tk.Tk):
             if self.result_options:
                 self._schedule_preview_gallery_refresh()
             else:
-                self.status_var.set("Artwork priority updated. Fetch a preview to see results in this order.")
+                self.status_var.set("Artwork priority updated. Search again to see results in this order.")
             return
         self._schedule_build_preview_search(delay=650)
 
@@ -3241,6 +3260,111 @@ class ThumbnailScraperApp(tk.Tk):
         self.search_var.set(self.suggestion_box.get(selection[0]))
         self.hide_suggestions()
 
+    def choose_sd_scan_game(self, event=None):
+        selection = self.sd_scan_game_combo.current()
+        if selection < 0 or selection >= len(self.sd_scan_unmatched_games):
+            return
+        game = self.sd_scan_unmatched_games[selection]
+        self.active_sd_scan_game = game
+        self.search_var.set(Path(game["path"]).stem if game.get("path") else Path(game["title"]).stem)
+        self.preview_system_var.set(game.get("system") or DEFAULT_SYSTEM)
+        self.notebook.select(self.preview_tab)
+        self.status_var.set("Search for artwork for this SD card game, then add the result to Custom Art.")
+
+    def clear_sd_scan_games(self):
+        self.sd_scan_unmatched_games.clear()
+        self.sd_scan_game_combo.configure(values=[])
+        self.sd_scan_game_var.set("")
+        self.active_sd_scan_game = None
+        self.clear_sd_scan_games_button.configure(state="disabled")
+        self.status_var.set("Cleared unmatched SD card games.")
+
+    def clear_active_sd_scan_game(self, event=None):
+        # Editing the query means the selected queue entry is no longer the search target.
+        self.active_sd_scan_game = None
+
+    def import_sd_scan_report(self):
+        report_name = filedialog.askopenfilename(
+            title="Import SD scan report",
+            filetypes=[("SD scan reports", "*.txt"), ("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not report_name:
+            return
+        report_path = Path(report_name)
+        imported: list[dict[str, str]] = []
+        metadata_path = report_path.with_suffix(".json")
+        if metadata_path.is_file():
+            try:
+                payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+                imported = [
+                    {
+                        "title": str(item["title"]),
+                        "system": str(item.get("system", DEFAULT_SYSTEM)),
+                        "path": str(item.get("path", "")),
+                        "relative": str(item.get("relative", "")),
+                    }
+                    for item in payload.get("unmatched_games", [])
+                    if isinstance(item, dict) and item.get("title")
+                ]
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                messagebox.showwarning(APP_NAME, f"Could not read scan report data:\n{exc}", parent=self)
+                return
+        if not imported:
+            try:
+                lines = report_path.read_text(encoding="utf-8-sig").splitlines()
+            except OSError as exc:
+                messagebox.showwarning(APP_NAME, f"Could not read scan report:\n{exc}", parent=self)
+                return
+            prefix = "No artwork match found for "
+            suffix = " on any of the media providers."
+            for line in lines:
+                line = line.strip()
+                if line.startswith(prefix) and line.endswith(suffix):
+                    title = line[len(prefix):-len(suffix)]
+                    system = SYSTEM_BY_EXTENSION.get(Path(title).suffix.lower(), DEFAULT_SYSTEM)
+                    imported.append({"title": title, "system": system, "path": "", "relative": ""})
+        if not imported:
+            messagebox.showinfo(APP_NAME, "No unmatched game entries were found in that report.", parent=self)
+            return
+        existing = {
+            (item.get("path", "").casefold(), item["title"].casefold(), item.get("system", "").casefold())
+            for item in self.sd_scan_unmatched_games
+        }
+        added = 0
+        for game in imported:
+            key = (game.get("path", "").casefold(), game["title"].casefold(), game.get("system", "").casefold())
+            if key not in existing:
+                self.sd_scan_unmatched_games.append(game)
+                existing.add(key)
+                added += 1
+        self.refresh_sd_scan_game_dropdown()
+        self.status_var.set(f"Imported {added} unmatched game(s) from the scan report.")
+
+    def refresh_sd_scan_game_dropdown(self):
+        self.sd_scan_game_combo.configure(values=[
+            f"{Path(game['path']).name if game.get('path') else game['title']} — {game.get('system', DEFAULT_SYSTEM)}"
+            for game in self.sd_scan_unmatched_games
+        ])
+        self.sd_scan_game_var.set("")
+        self.clear_sd_scan_games_button.configure(
+            state="normal" if self.sd_scan_unmatched_games else "disabled"
+        )
+
+    def remove_sd_scan_game_from_queue(self, game: dict[str, str]):
+        """Remove a manually searched game while retaining its active add-to-custom context."""
+        self.sd_scan_unmatched_games = [
+            queued for queued in self.sd_scan_unmatched_games
+            if (
+                queued.get("path") != game.get("path")
+                if game.get("path")
+                else not (
+                    queued.get("title", "").casefold() == game.get("title", "").casefold()
+                    and queued.get("system", "").casefold() == game.get("system", "").casefold()
+                )
+            )
+        ]
+        self.refresh_sd_scan_game_dropdown()
+
     def hide_suggestions(self):
         if self.suggestion_box and self.suggestion_box.winfo_ismapped():
             self.suggestion_box.pack_forget()
@@ -3284,13 +3408,17 @@ class ThumbnailScraperApp(tk.Tk):
             self.preview_loading.pack_forget()
 
     def preview_search(self):
+        searched_sd_game = self.active_sd_scan_game
+        if searched_sd_game:
+            self.remove_sd_scan_game_from_queue(searched_sd_game)
+        self.current_result = None
         self.set_preview_loading(True)
         # A new query replaces the result set; release gallery image objects from
         # the previous query. Region-priority changes reuse these cached thumbs.
         self._gallery_thumb_cache.clear()
         def worker():
             try:
-                self.status_var.set("Fetching preview...")
+                self.status_var.set("Searching for artwork…")
                 results = self.providers.search_many(
                     self.preview_provider_var.get(),
                     self.search_var.get(),
@@ -3501,16 +3629,20 @@ class ThumbnailScraperApp(tk.Tk):
 
     def add_preview_to_custom(self):
         if not self.current_result:
-            messagebox.showinfo(APP_NAME, "Fetch or choose an image first.")
+            messagebox.showinfo(APP_NAME, "Search for artwork or choose an image first.")
             return
         dialog = tk.Toplevel(self)
-        dialog.title("Add To Custom Art")
+        dialog.title("Add to Custom Art")
         dialog.configure(bg="#152235")
         dialog.transient(self)
         dialog.grab_set()
         dialog.resizable(False, False)
         ttk.Label(dialog, text="Exact filename without its extension").grid(row=0, column=0, sticky="w", padx=16, pady=(16, 6))
-        initial_name = Path(self.search_var.get().strip()).stem or display_libretro_name(self.current_result.label)
+        sd_game = self.active_sd_scan_game
+        initial_name = (
+            Path(sd_game.get("path") or sd_game["title"]).stem if sd_game
+            else Path(self.search_var.get().strip()).stem or display_libretro_name(self.current_result.label)
+        )
         name_var = tk.StringVar(value=initial_name)
         entry = ttk.Entry(dialog, textvariable=name_var, width=42)
         entry.grid(row=1, column=0, sticky="ew", padx=16)
@@ -3538,19 +3670,23 @@ class ThumbnailScraperApp(tk.Tk):
                 return
             self.custom_roms.append(
                 CustomRomItem(
-                    "",
+                    sd_game.get("path", "") if sd_game else "",
                     name,
                     "----",
                     name,
                     image_path=image_path,
                     size=selected_size,
-                    system=self.preview_system_var.get(),
+                    system=sd_game.get("system", self.preview_system_var.get()) if sd_game else self.preview_system_var.get(),
+                    rom_relative_path=sd_game.get("relative", "") if sd_game else "",
                 )
             )
             self.refresh_custom_roms([len(self.custom_roms) - 1])
             self.save_settings()
             self.notebook.select(self.custom_tab)
             self.status_var.set(f"Added {name} to Custom Art.")
+            if sd_game:
+                self.active_sd_scan_game = None
+                self.sd_scan_game_var.set("")
             dialog.destroy()
 
         ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side="right", padx=(8, 0))
@@ -3597,7 +3733,7 @@ class ThumbnailScraperApp(tk.Tk):
         )
         ttk.Label(
             dialog,
-            text=f"Scanning: {root}\nChoose the actual SD root so grouping, console and alphabet folders match the ROM browser path.",
+            text=f"SD card: {root}\nChoose the SD card root to preserve the folder paths used by your ROM browser.",
             style="Muted.TLabel",
             wraplength=480,
         ).grid(row=1, column=0, columnspan=2, sticky="w", padx=18, pady=(0, 14))
@@ -3610,7 +3746,7 @@ class ThumbnailScraperApp(tk.Tk):
             state="readonly",
             width=24,
         ).grid(row=2, column=1, sticky="ew", padx=(8, 18), pady=5)
-        ttk.Label(dialog, text="Create").grid(row=3, column=0, sticky="w", padx=(18, 8), pady=5)
+        ttk.Label(dialog, text="Thumbnail sizes").grid(row=3, column=0, sticky="w", padx=(18, 8), pady=5)
         sizes_var = tk.StringVar(value="Wide and square")
         ttk.Combobox(
             dialog,
@@ -3628,22 +3764,22 @@ class ThumbnailScraperApp(tk.Tk):
         use_hash_matching_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             dialog,
-            text="Use ROM hash matching if name searches fail (slower; reads ROM contents)",
+            text="Use ROM hashes if name searches fail (slower; reads ROM files)",
             variable=use_hash_matching_var,
         ).grid(row=5, column=0, columnspan=2, sticky="w", padx=18, pady=(8, 2))
         auto_fallback_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             dialog,
-            text="Automatically try fallback providers when artwork is unavailable",
+            text="Try fallback providers automatically if artwork cannot be downloaded",
             variable=auto_fallback_var,
         ).grid(row=6, column=0, columnspan=2, sticky="w", padx=18, pady=(6, 2))
         ttk.Label(
             dialog,
             text=(
-                "Name searches use Libretro → TheGamesDB → ScreenScraper → IGDB. "
-                "Automatic fallback skips the per-image Try Fallback / Skip Image prompt after a download fails. "
-                "Hash mode, if enabled, is the final step and checks TheGamesDB and ScreenScraper. "
-                "Mirrored output preserves ROM paths under IMGS / IMGS2."
+                "Search order: Libretro → TheGamesDB → ScreenScraper → IGDB. "
+                "Automatic fallback skips the prompt after a download fails. "
+                "ROM hash searches check TheGamesDB and ScreenScraper. "
+                "Mirrored artwork follows ROM folders under IMGS and IMGS2."
             ),
             style="Muted.TLabel",
             wraplength=480,
@@ -3675,11 +3811,11 @@ class ThumbnailScraperApp(tk.Tk):
             return
         self.scan_running = True
         self.scan_sd_button.configure(state="disabled")
-        self.status_var.set("Scanning the SD card for supported games...")
+        self.status_var.set("Scanning the SD card for supported games…")
         self.sd_scan_progress_window = OperationProgressWindow(
             self,
             "Scan SD Card",
-            "Scanning folders on the SD card...",
+            "Scanning folders on the SD card…",
         )
 
         def report_progress(heading, current=None, total=None, detail=""):
@@ -3852,7 +3988,7 @@ class ThumbnailScraperApp(tk.Tk):
                 ttk.Label(
                     dialog,
                     text=(
-                        f"Error: {detail}\n\nTry the next configured artwork provider?\n"
+                        f"Error: {detail}\n\nTry the next artwork provider?\n"
                         "Fallback order: TheGamesDB → ScreenScraper → IGDB."
                     ),
                     style="Muted.TLabel",
@@ -3864,7 +4000,7 @@ class ThumbnailScraperApp(tk.Tk):
                 )
                 ttk.Checkbutton(
                     dialog,
-                    text="Automatically try fallback for all future titles in this scan",
+                    text="Automatically try fallback for the rest of this scan",
                     variable=auto_fallback_var,
                 ).grid(row=2, column=0, sticky="w", padx=18, pady=(0, 12))
                 buttons = ttk.Frame(dialog, style="Panel.TFrame")
@@ -3949,6 +4085,7 @@ class ThumbnailScraperApp(tk.Tk):
 
         candidates: list[SdRomCandidate] = []
         unmatched: list[str] = []
+        unmatched_games: list[dict[str, str]] = []
         seen_targets: set[str] = set()
 
         for number, (path, system) in enumerate(files, start=1):
@@ -4204,8 +4341,20 @@ class ThumbnailScraperApp(tk.Tk):
                             f"{candidate.system}: {candidate.path.name} "
                             f"(name search: {exc}; hash search: {hash_error})"
                         )
+                        unmatched_games.append({
+                            "title": candidate.path.name,
+                            "system": candidate.system,
+                            "path": str(candidate.path),
+                            "relative": candidate.relative,
+                        })
                 else:
                     unmatched.append(f"{candidate.system}: {candidate.path.name} (provider fallback chain: {exc})")
+                    unmatched_games.append({
+                        "title": candidate.path.name,
+                        "system": candidate.system,
+                        "path": str(candidate.path),
+                        "relative": candidate.relative,
+                    })
 
         # Cache identity includes the provider, console and Libretro art folder.
         # The same title can therefore have separate images from each provider.
@@ -4483,6 +4632,7 @@ class ThumbnailScraperApp(tk.Tk):
             "additions": additions,
             "updates": updates,
             "unmatched": unmatched,
+            "unmatched_games": unmatched_games,
             "download_errors": download_errors,
             "skipped_existing": skipped_existing,
             "cache_hits": cache_hits,
@@ -4512,12 +4662,49 @@ class ThumbnailScraperApp(tk.Tk):
         messagebox.showwarning(APP_NAME, str(error))
 
     def show_sd_scan_results(self, result: dict):
+        unmatched_games = result.get("unmatched_games", [])
+        if len(unmatched_games) > 50:
+            add_to_queue = messagebox.askyesno(
+                APP_NAME,
+                f"{len(unmatched_games):,} games had no artwork match. Add them to the manual search list?",
+                detail="A large list can be difficult to review. You can still use the saved scan report if you skip the list.",
+                parent=self,
+            )
+            self.sd_scan_unmatched_games = unmatched_games if add_to_queue else []
+        else:
+            self.sd_scan_unmatched_games = unmatched_games
+        options = [
+            f"{Path(game['path']).name} — {game['system']}"
+            for game in self.sd_scan_unmatched_games
+        ]
+        self.sd_scan_game_combo.configure(values=options)
+        self.clear_sd_scan_games_button.configure(state="normal" if options else "disabled")
+        self.sd_scan_game_var.set("")
+        self.active_sd_scan_game = None
+        report_lines = [
+            f"No artwork match found for {game['title']} on any of the media providers."
+            for game in unmatched_games
+        ]
+        report_dir = self.base_dir / OUTPUT_FOLDER_NAME / "SD Scan Reports"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_path = report_dir / f"sd_scan_{time.strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+        counter = 2
+        while report_path.exists():
+            report_path = report_dir / f"sd_scan_{time.strftime('%Y-%m-%d_%H-%M-%S')}_{counter}.txt"
+            counter += 1
+        report_text = "\n".join(report_lines) if report_lines else "Artwork matches were found for all scanned games."
+        report_path.write_text(report_text + "\n", encoding="utf-8")
+        report_path.with_suffix(".json").write_text(
+            json.dumps({"unmatched_games": unmatched_games}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
         dialog = tk.Toplevel(self)
         dialog.title("SD Scan Results")
         dialog.configure(bg="#152235")
         dialog.transient(self)
-        dialog.geometry("620x430")
-        dialog.minsize(520, 340)
+        dialog.geometry("620x360")
+        dialog.minsize(520, 280)
         dialog.columnconfigure(0, weight=1)
         dialog.rowconfigure(2, weight=1)
         ttk.Label(dialog, text="SD library scan complete", style="Section.TLabel").grid(
@@ -4527,18 +4714,9 @@ class ThumbnailScraperApp(tk.Tk):
             f"Found {result['files']} supported files, matched {result['matched_files']}, "
             f"and added {len(result['additions'])} artwork entries."
         )
-        if result["skipped_existing"]:
-            summary += f" Skipped {result['skipped_existing']} thumbnails already present in settings, cache-linked entries, or IMGS/IMGS2 output."
-        if result.get("cache_hits"):
-            summary += f" Reused {result['cache_hits']} cached source images without downloading them again."
         ttk.Label(dialog, text=summary, style="Muted.TLabel", wraplength=570).grid(
             row=1, column=0, sticky="w", padx=18, pady=(0, 10)
         )
-        details = []
-        if result["unmatched"]:
-            details.append("No Libretro match:\n" + "\n".join(result["unmatched"]))
-        if result["download_errors"]:
-            details.append("Could not download:\n" + "\n".join(result["download_errors"]))
         text_box = tk.Text(
             dialog,
             bg="#101a29",
@@ -4548,11 +4726,17 @@ class ThumbnailScraperApp(tk.Tk):
             wrap="word",
             font=("Segoe UI", 9),
         )
-        text_box.grid(row=2, column=0, sticky="nsew", padx=18, pady=(0, 12))
-        text_box.insert("1.0", "\n\n".join(details) if details else "Every supported file was matched.")
+        text_box.grid(row=2, column=0, sticky="nsew", padx=(18, 0), pady=(0, 12))
+        text_scrollbar = ttk.Scrollbar(dialog, orient="vertical", command=text_box.yview)
+        text_scrollbar.grid(row=2, column=1, sticky="ns", padx=(0, 18), pady=(0, 12))
+        text_box.configure(yscrollcommand=text_scrollbar.set)
+        text_box.insert("1.0", report_text)
         text_box.configure(state="disabled")
+        ttk.Label(dialog, text=f"Saved report: {report_path}", style="Muted.TLabel", wraplength=570).grid(
+            row=3, column=0, sticky="w", padx=18, pady=(0, 10)
+        )
         ttk.Button(dialog, text="Done", style="Accent.TButton", command=dialog.destroy).grid(
-            row=3, column=0, sticky="e", padx=18, pady=(0, 18)
+            row=4, column=0, sticky="e", padx=18, pady=(0, 18)
         )
 
     def next_custom_code(self) -> str:
@@ -4619,11 +4803,11 @@ class ThumbnailScraperApp(tk.Tk):
         dialog.transient(self)
         dialog.grab_set()
         dialog.resizable(False, False)
-        ttk.Label(dialog, text="Filename without its extension, or folder name").grid(row=0, column=0, sticky="w", padx=16, pady=(16, 6))
+        ttk.Label(dialog, text="ROM filename (without extension) or system folder").grid(row=0, column=0, sticky="w", padx=16, pady=(16, 6))
         name_var = tk.StringVar()
         entry = ttk.Entry(dialog, textvariable=name_var, width=42)
         entry.grid(row=1, column=0, sticky="ew", padx=16)
-        ttk.Label(dialog, text="Example: Pokemon Emerald Rogue or Game Boy Advance", style="Muted.TLabel").grid(row=2, column=0, sticky="w", padx=16, pady=(6, 12))
+        ttk.Label(dialog, text="For example: Pokemon Emerald Rogue or Game Boy Advance", style="Muted.TLabel").grid(row=2, column=0, sticky="w", padx=16, pady=(6, 12))
         buttons = ttk.Frame(dialog, style="Panel.TFrame")
         buttons.grid(row=3, column=0, sticky="e", padx=16, pady=(0, 16))
 
@@ -4639,7 +4823,7 @@ class ThumbnailScraperApp(tk.Tk):
                 for item in self.custom_roms
                 if not self.custom_art_relative_path(item)
             }:
-                messagebox.showinfo(APP_NAME, "That CUSTOM name and size is already in the list.", parent=dialog)
+                messagebox.showinfo(APP_NAME, "That name and size are already in the list.", parent=dialog)
                 return
             self.custom_roms.append(CustomRomItem("", name, "----", name, size=selected_size))
             self.refresh_custom_roms([len(self.custom_roms) - 1])
@@ -4734,7 +4918,7 @@ class ThumbnailScraperApp(tk.Tk):
     def set_custom_image(self):
         indices = self.selected_custom_indices()
         if not indices:
-            messagebox.showinfo(APP_NAME, "Select one or more custom art entries first.")
+            messagebox.showinfo(APP_NAME, "Select one or more entries first.")
             return
         path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp *.webp"), ("All files", "*.*")])
         if not path:
@@ -4760,7 +4944,7 @@ class ThumbnailScraperApp(tk.Tk):
     def apply_custom_code(self):
         indices = self.selected_custom_indices()
         if len(indices) != 1:
-            messagebox.showinfo(APP_NAME, "Select one custom entry to edit its name.")
+            messagebox.showinfo(APP_NAME, "Select one entry to edit its name.")
             return
         try:
             code = validate_custom_art_name(self.custom_code_var.get())
@@ -4772,7 +4956,7 @@ class ThumbnailScraperApp(tk.Tk):
             messagebox.showinfo(
                 APP_NAME,
                 "Mirrored artwork always uses the ROM's actual filename and relative folder. "
-                "Rename the ROM on the SD card and scan it again to change that path; the editable name applies to CUSTOM artwork.",
+                "Rename the ROM and scan again to change its path. The custom name applies to Legacy CUSTOM artwork.",
             )
             return
         size = item.size
@@ -4797,7 +4981,7 @@ class ThumbnailScraperApp(tk.Tk):
             if hasattr(self, "custom_preview_info"):
                 self.custom_preview_label.configure(image="", width=300, height=210)
                 self.custom_preview_photo = None
-                self.custom_preview_info.configure(text="Choose a ROM and image")
+                self.custom_preview_info.configure(text="Select an entry to preview its image.")
             return
         item = self.custom_roms[indices[0]]
         self.custom_code_var.set(item.new_code)
@@ -4805,7 +4989,7 @@ class ThumbnailScraperApp(tk.Tk):
         if not item.image_path:
             self.custom_preview_label.configure(image="", width=300, height=210)
             self.custom_preview_photo = None
-            self.custom_preview_info.configure(text=f"{item.new_code}.bmp - no image set")
+            self.custom_preview_info.configure(text=f"{item.new_code}.bmp — no image set")
             return
         try:
             image = Image.open(item.image_path)
@@ -4829,11 +5013,11 @@ class ThumbnailScraperApp(tk.Tk):
         if self.custom_build_running:
             return
         if not self.custom_roms:
-            messagebox.showinfo(APP_NAME, "Add custom entries first.")
+            messagebox.showinfo(APP_NAME, "Add artwork entries first.")
             return
         missing = [item.new_code for item in self.custom_roms if not item.image_path]
         if missing:
-            messagebox.showwarning(APP_NAME, "Set images for every custom entry first.")
+            messagebox.showwarning(APP_NAME, "Set an image for each entry before building the art pack.")
             return
 
         layout = self.custom_output_layout_var.get()
@@ -4856,9 +5040,9 @@ class ThumbnailScraperApp(tk.Tk):
                 labels = ", ".join(over_limit)
                 messagebox.showwarning(
                     APP_NAME,
-                    f"The following legacy CUSTOM output(s) exceed the 256 indexed-image limit: {labels}.\n\n"
-                    "Use Mirror ROM folders for ROM-matched artwork, or reduce name-only CUSTOM artwork to 256 images per size. "
-                    "Extension defaults such as gb.bmp and nes.bmp are loaded directly and do not consume an index entry.",
+                    f"Legacy CUSTOM exceeds its 256-image limit for: {labels}.\n\n"
+                    "Use Mirror ROM folders for ROM-matched artwork, or reduce name-only artwork to 256 images per size. "
+                    "System defaults such as gb.bmp and nes.bmp do not count toward the limit.",
                 )
                 return
 
@@ -4899,7 +5083,7 @@ class ThumbnailScraperApp(tk.Tk):
         self.build_custom_art_button.configure(state="disabled")
         self.custom_art_progress_window = OperationProgressWindow(
             self,
-            "Build Custom Art",
+            "Build Art Pack",
             f"Preparing to build {len(tasks):,} thumbnail(s)...",
         )
 
@@ -4966,17 +5150,17 @@ class ThumbnailScraperApp(tk.Tk):
         if hasattr(self, "build_custom_art_button"):
             self.build_custom_art_button.configure(state="normal")
         if error is not None:
-            self.status_var.set("Custom art build failed.")
+            self.status_var.set("Art pack build failed.")
             partial = f"\n\nPartial output may be available at:\n{run_dir}" if run_dir else ""
-            messagebox.showwarning(APP_NAME, f"Could not build custom artwork:\n{error}{partial}")
+            messagebox.showwarning(APP_NAME, f"Could not build the art pack:\n{error}{partial}")
             return
-        self.status_var.set(f"Custom art output created: {run_dir}")
+        self.status_var.set(f"Art pack created: {run_dir}")
         extra = (
             f"\nMirrored files: {made_mirrored}; CUSTOM files: {made_custom}."
             if layout == "Mirror ROM folders"
             else "\nOutput layout: legacy CUSTOM."
         )
-        messagebox.showinfo(APP_NAME, f"Custom art output created:\n{run_dir}{extra}")
+        messagebox.showinfo(APP_NAME, f"Art pack created:\n{run_dir}{extra}")
 
     def update_preview(self):
         if not self.current_source_image:
@@ -5005,10 +5189,10 @@ class ThumbnailScraperApp(tk.Tk):
 
     def add_exception(self):
         if self.preview_system_var.get() != DEFAULT_SYSTEM:
-            messagebox.showinfo(APP_NAME, "Full-pack exceptions are only used for Game Boy Advance artwork.")
+            messagebox.showinfo(APP_NAME, "Exceptions only apply to Game Boy Advance artwork.")
             return
         if not self.current_result:
-            messagebox.showinfo(APP_NAME, "Fetch or choose an image first.")
+            messagebox.showinfo(APP_NAME, "Search for artwork or choose an image first.")
             return
         title = self.search_var.get().strip()
         rule = ExceptionRule(
