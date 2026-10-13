@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.10.5 - Console-aware local artwork folders
+
+- Fixed local-pack lookups returning artwork from the wrong console when several consoles share a game title, for example Game Boy box art being used for the NES version of the same game while a matching image existed in a `Nintendo` folder.
+- Local-pack console folders are now recognized under many more common names for NES (`Nintendo`, `Original Nintendo`, `Famicom`, `FC`, ...), Game Boy, Game Boy Color, Game Gear, Master System, TurboGrafx-16/PC Engine (`TG16`, `PCE`, ...) and Neo Geo Pocket Color (`NGPC`, ...), including libretro-thumbnails, LaunchBox, ES-DE/Batocera and OnionOS style names.
+- The deepest console-specific folder wins, so `Nintendo/Game Boy/...` is Game Boy; a bare `Nintendo` folder is only treated as NES when nothing more specific is in the same path, and a publisher folder such as `GBA/Box Art/Nintendo/` no longer changes which console owns the image.
+- When a console has no folder of its own, artwork from folders that clearly belong to another console (including unsupported ones such as SNES, Genesis and Arcade) is no longer borrowed; artwork in unlabeled folders is still used, and packs with no console folders keep the original whole-pack matching.
+- Names such as `Game Boy (Color)` are read as Game Boy Color rather than Game Boy. Neo Geo Pocket and Neo Geo Pocket Color folders may serve either console because `.ngc` files are scanned as Neo Geo Pocket.
+- Faster console scoping on large media collections, and added regression tests for every alias, nested folders, publisher folders and cross-console protection.
+
 ## v1.10.4 - Local-pack-first artwork lookup
 - Added a Settings toggle that makes matching local-pack artwork take priority over existing cached source images, selected online providers, and optional ROM hash lookup. The option is off by default.
 - Local packs are recursively name-matched inside detected console folders, independent of alphabet/nested folder layout; if no console folder is identifiable, the original whole-pack matching behavior remains.

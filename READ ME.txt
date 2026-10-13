@@ -1,4 +1,4 @@
-DS STYLE THUMBNAIL SCRAPER v1.10.4
+DS STYLE THUMBNAIL SCRAPER v1.10.5
 
 For DS Style v7.4 or newer.
 
@@ -18,6 +18,8 @@ Build complete Game Boy Advance packs from Libretro or a local artwork pack. For
 When a provider returns invalid image data during an SD scan, the scraper offers Try Fallback or Skip Image. Enable automatic fallback in the SD-scan setup or on the first prompt to try configured fallback providers for later titles without repeated prompts. Optional ROM hash matching remains a separate, slower final fallback. Successful source images are cached persistently, and repeat scans skip valid thumbnails already in cache, on the SD card under SYSTEM/IMGS or SYSTEM/IMGS2, or in prior scraper output folders. Corrupt or wrong-sized output thumbnails are regenerated.
 
 The Local Pack folder is a read-only artwork source. When "Prefer matching local-pack art over existing caches and online/hash results" is enabled in Settings, matching local images are searched first, using console-folder names when detected and matching by image filename/title through any nested folders. It refreshes the scraper's source-image cache and queues matching existing entries for rebuild in the Custom Art build step. The scraper only reads the selected local pack; it never writes, renames, or deletes files there.
+
+Console folders in the Local Pack are recognized by common names (for example NES, Nintendo, Original Nintendo, Famicom, Game Boy, GBC, Game Gear, Master System, SMS, TurboGrafx-16, TG16, PC Engine, Neo Geo Pocket Color, NGPC). Artwork for a ROM is taken from that console's folder first, so a Game Boy image is not used for the NES game with the same title. A folder named just "Nintendo" is treated as NES unless it contains a more specific console folder such as "Game Boy". If a console has no folder of its own, artwork in other consoles' folders is skipped and the scraper moves on to the next artwork source.
 
 By default, scanned ROM artwork mirrors each ROM's directory path under IMGS and IMGS2. The mirrored files do not use the flat CUSTOM index and are not limited to 256 images. "Legacy CUSTOM" remains available for older kernels/workflows and is limited to 256 ordinary indexed images per size. Extension defaults such as CUSTOM/gb.bmp are supported by kernels with the matching artwork changes.
 

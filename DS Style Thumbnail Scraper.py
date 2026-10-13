@@ -43,7 +43,7 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Thumbnail Scraper"
-APP_VERSION = "1.10.4"
+APP_VERSION = "1.10.5"
 OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper output"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
 CONFIG_NAME = "thumbnail_scraper_settings.json"
@@ -181,6 +181,181 @@ IGDB_PLATFORM_ALIASES = {
     "Arcadia 2001": ("Arcadia 2001",),
     "Super Cassette Vision": ("Super Cassette Vision",),
 }
+# Extra folder names that local media collections (LaunchBox, ES-DE, Batocera,
+# RetroPie, OnionOS, MiSTer, libretro-thumbnails and hand-sorted libraries) use to
+# label a console. They are added to the system name, Libretro repo name and
+# provider aliases above. Matching ignores case, spaces, hyphens and underscores,
+# so "Game Boy", "GameBoy" and "game-boy" are one entry, and "TG16" also covers
+# "TG-16". The text inside () or [] is kept when matching a full folder name.
+LOCAL_PACK_DIRECTORY_ALIASES = {
+    "Game Boy Advance": ("Nintendo GBA",),
+    "Game Boy": (
+        "Original Game Boy",
+        "Nintendo Original Game Boy",
+        "Game Boy Original",
+        "Game Boy Classic",
+        "Game Boy DMG",
+        "Nintendo Game Boy DMG",
+        "DMG",
+    ),
+    "Game Boy Color": (
+        "Game Boy Colour",
+        "Nintendo Game Boy Colour",
+        "Game Boy Color GBC",
+        "Game Boy Color CGB",
+        "Nintendo GBC",
+        "GB Color",
+        "GB Colour",
+        "CGB",
+    ),
+    "Nintendo Entertainment System": (
+        "Original Nintendo",
+        "Original Nintendo Entertainment System",
+        "Nintendo NES",
+        "Nintendo 8-bit",
+        "8-bit Nintendo",
+        "Family Computer",
+        "Nintendo Family Computer",
+        "Nintendo Famicom",
+        "NES Famicom",
+        "Famicom NES",
+        "Nintendo NES Famicom",
+        "FC",
+    ),
+    "Master System": (
+        "Master System Mark III",
+        "Master System Mark 3",
+        "Sega Master System Mark 3",
+        "Sega Mark III",
+        "Sega Mark 3",
+        "Mark 3",
+        "SMS",
+        "Sega SMS",
+    ),
+    "Game Gear": ("Sega GG", "GG", "Game Gear GG", "Sega Game Gear GG"),
+    "PC Engine": (
+        "PC Engine TurboGrafx-16",
+        "TurboGrafx-16 PC Engine",
+        "TurboGrafx-16 and PC Engine",
+        "PC Engine and TurboGrafx-16",
+        "NEC TurboGrafx-16",
+        "NEC TurboGrafx",
+        "TurboGrafx",
+        "TG16",
+        "TGFX16",
+        "PCE",
+        "NEC PCE",
+    ),
+    "Neo Geo Pocket": ("NGP", "SNK NGP", "Neo Geo Pocket NGP"),
+    "Neo Geo Pocket Color": (
+        "Neo Geo Pocket Colour",
+        "SNK Neo Geo Pocket Colour",
+        "Neo Geo Pocket Color NGPC",
+        "SNK NGPC",
+        "NGPC",
+        "NGP Color",
+        "NGP Colour",
+    ),
+}
+# A bare brand name is only trusted when no console-specific folder appears
+# anywhere in the same path. "Nintendo/Game Boy/..." therefore resolves to Game Boy
+# and "GBA/Box Art/Nintendo/..." (a publisher folder) stays Game Boy Advance, while
+# "Nintendo/Box Art/..." is treated as NES.
+LOCAL_PACK_BROAD_DIRECTORY_ALIASES = {
+    "Nintendo Entertainment System": ("Nintendo",),
+}
+# Consoles this scraper cannot scrape but whose folders commonly sit beside the
+# supported ones and share game titles (Addams Family exists on NES, Game Boy, SNES,
+# Genesis, Game Gear and more). Art inside these folders is never offered for a
+# supported system when that system has no folder of its own.
+LOCAL_PACK_OTHER_CONSOLE_FOLDERS = (
+    "SNES", "Super NES", "Super Nintendo", "Super Nintendo Entertainment System",
+    "Nintendo Super Nintendo Entertainment System", "Super Famicom",
+    "Nintendo Super Famicom", "SFC",
+    "Nintendo 64", "N64", "GameCube", "Nintendo GameCube", "Wii", "Nintendo Wii",
+    "Nintendo DS", "NDS", "Nintendo DSi", "Nintendo 3DS", "3DS",
+    "Virtual Boy", "Nintendo Virtual Boy", "Pokemon Mini",
+    "Famicom Disk System", "Nintendo Famicom Disk System", "FDS",
+    "Genesis", "Sega Genesis", "Mega Drive", "Sega Mega Drive", "Genesis Mega Drive",
+    "Sega Genesis Mega Drive", "Mega Drive Genesis", "Sega Mega Drive Genesis",
+    "Sega CD", "Mega CD", "Sega Mega CD", "Sega 32X", "32X", "Sega Saturn", "Saturn",
+    "Sega Dreamcast", "Dreamcast",
+    "PC Engine CD", "TurboGrafx CD", "TurboGrafx-16 CD", "SuperGrafx", "PC Engine SuperGrafx",
+    "Neo Geo", "SNK Neo Geo", "Neo Geo AES", "Neo Geo MVS", "Neo Geo CD",
+    "Atari 2600", "Atari 5200", "Atari 7800", "Atari Lynx", "Lynx", "Atari Jaguar", "Jaguar",
+    "PlayStation", "Sony PlayStation", "PS1", "PSX", "PlayStation 2", "PS2", "PSP",
+    "PlayStation Portable",
+    "3DO", "Intellivision", "Mattel Intellivision", "Arcade", "MAME", "FBNeo",
+)
+# .ngc is listed under "Neo Geo Pocket" in LIBRETRO_SYSTEMS but is the usual
+# Neo Geo Pocket Color extension, so either console's folder may serve both.
+LOCAL_PACK_COMPATIBLE_SYSTEMS = {
+    "Neo Geo Pocket": ("Neo Geo Pocket Color",),
+    "Neo Geo Pocket Color": ("Neo Geo Pocket",),
+}
+LOCAL_PACK_OTHER_CONSOLE = "<other console>"
+
+
+def _squash_folder_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.casefold().replace("&", "and"))
+
+
+def local_pack_folder_keys(folder_name: str) -> tuple[str, ...]:
+    """Lookup keys for one folder name: the full name, then without () and [] text.
+
+    The full name is tried first so "Game Boy (Color)" means Game Boy Color, while
+    "NES (USA)" still falls back to "NES".
+    """
+    full = _squash_folder_name(folder_name)
+    bare = _squash_folder_name(re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", folder_name))
+    return tuple(dict.fromkeys(key for key in (full, bare) if key))
+
+
+def _build_local_pack_folder_owners() -> tuple[dict[str, frozenset[str]], dict[str, frozenset[str]]]:
+    specific: dict[str, set[str]] = {}
+    broad: dict[str, set[str]] = {}
+
+    def add(table: dict[str, set[str]], name: str, owner: str) -> None:
+        key = _squash_folder_name(name)
+        if key:
+            table.setdefault(key, set()).add(owner)
+
+    for system, details in LIBRETRO_SYSTEMS.items():
+        add(specific, system, system)
+        add(specific, details.get("repo", ""), system)
+        for mapping in (
+            THEGAMESDB_PLATFORM_ALIASES,
+            SCREENSCRAPER_SYSTEM_ALIASES,
+            IGDB_PLATFORM_ALIASES,
+            LOCAL_PACK_DIRECTORY_ALIASES,
+        ):
+            for alias in mapping.get(system, ()):
+                add(specific, alias, system)
+        for alias in LOCAL_PACK_BROAD_DIRECTORY_ALIASES.get(system, ()):
+            add(broad, alias, system)
+    for name in LOCAL_PACK_OTHER_CONSOLE_FOLDERS:
+        add(specific, name, LOCAL_PACK_OTHER_CONSOLE)
+    return (
+        {key: frozenset(owners) for key, owners in specific.items()},
+        {key: frozenset(owners) for key, owners in broad.items()},
+    )
+
+
+LOCAL_PACK_FOLDER_OWNERS, LOCAL_PACK_BROAD_FOLDER_OWNERS = _build_local_pack_folder_owners()
+
+
+def local_pack_folder_owners(folder_name: str) -> tuple[frozenset[str], frozenset[str]]:
+    """Return (console-specific owners, broad-brand owners) for a folder name."""
+    for key in local_pack_folder_keys(folder_name):
+        owners = LOCAL_PACK_FOLDER_OWNERS.get(key)
+        if owners:
+            return owners, frozenset()
+        owners = LOCAL_PACK_BROAD_FOLDER_OWNERS.get(key)
+        if owners:
+            return frozenset(), owners
+    return frozenset(), frozenset()
+
+
 GBA_SOURCE_CACHE_FILES = {
     "Named_Boxarts": "libretro_gba_boxarts.json",
     "Named_Snaps": "libretro_gba_snaps.json",
@@ -1025,34 +1200,61 @@ class Providers:
 
     def local_pack_system_aliases(self, system: str) -> set[str]:
         """Normalized directory names used by common local artwork-pack layouts."""
-        aliases = [system]
-        details = LIBRETRO_SYSTEMS.get(system)
-        if details:
-            aliases.append(details.get("repo", ""))
-        for mapping in (
-            THEGAMESDB_PLATFORM_ALIASES,
-            SCREENSCRAPER_SYSTEM_ALIASES,
-            IGDB_PLATFORM_ALIASES,
-        ):
-            aliases.extend(mapping.get(system, ()))
-        return {normalize_for_match(value) for value in aliases if value and normalize_for_match(value)}
+        aliases = {_squash_folder_name(system)}
+        aliases.update(key for key, owners in LOCAL_PACK_FOLDER_OWNERS.items() if system in owners)
+        aliases.update(key for key, owners in LOCAL_PACK_BROAD_FOLDER_OWNERS.items() if system in owners)
+        return {alias for alias in aliases if alias}
 
     def local_pack_art_files_for_system(self, art_files, pack_path: Path, system: str):
-        """Scope matching to a detected console folder, irrespective of deeper nesting.
+        """Scope matching to the folders that belong to this console.
 
-        If the pack has no recognizable folder for this console, preserve the legacy
-        whole-pack behavior. The configured pack is read-only: this only inspects paths.
+        Each image is owned by the console named by its folders: the deepest
+        console-specific folder wins ("Nintendo/Game Boy/..." is Game Boy), and a
+        bare brand folder such as "Nintendo" is only used when the path has nothing
+        more specific. Then:
+
+        1. Images owned by the requested console are used if there are any.
+        2. Otherwise images in folders that name no console are used, so a pack
+           that mixes labeled and unlabeled folders still works. Art owned by a
+           different console is never borrowed for this one.
+        3. A pack with no recognizable console folders keeps the legacy
+           whole-pack behavior.
+
+        The configured pack is read-only: this only inspects paths.
         """
-        aliases = self.local_pack_system_aliases(system)
-        scoped = []
+        accepted = {system, *LOCAL_PACK_COMPATIBLE_SYSTEMS.get(system, ())}
+        folder_cache: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
+        matched = []
+        unlabeled = []
+        recognized_console_folder = False
         for art in art_files:
             try:
                 folder_parts = art.path.relative_to(pack_path).parts[:-1]
             except ValueError:
                 continue
-            if any(normalize_for_match(part) in aliases for part in folder_parts):
-                scoped.append(art)
-        return (scoped, True) if scoped else (list(art_files), False)
+            owners = frozenset()
+            broad_owners = frozenset()
+            for part in reversed(folder_parts):
+                if part not in folder_cache:
+                    folder_cache[part] = local_pack_folder_owners(part)
+                specific, broad = folder_cache[part]
+                if specific:
+                    owners = specific
+                    break
+                if broad and not broad_owners:
+                    broad_owners = broad
+            owners = owners or broad_owners
+            if not owners:
+                unlabeled.append(art)
+                continue
+            recognized_console_folder = True
+            if owners & accepted:
+                matched.append(art)
+        if matched:
+            return matched, True
+        if recognized_console_folder:
+            return unlabeled, True
+        return list(art_files), False
 
     def search_local_pack_many(
         self, query: str, max_results: int | None = 20, system: str = DEFAULT_SYSTEM
