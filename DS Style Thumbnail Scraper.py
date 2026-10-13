@@ -1271,7 +1271,8 @@ class Providers:
         return list(art_files), False
 
     def search_local_pack_many(
-        self, query: str, max_results: int | None = 20, system: str = DEFAULT_SYSTEM
+        self, query: str, max_results: int | None = 20, system: str = DEFAULT_SYSTEM,
+        respect_regions: bool = True,
     ) -> list[ProviderResult]:
         pack = self.app.local_pack_var.get().strip()
         if not pack:
@@ -1331,7 +1332,7 @@ class Providers:
 
         candidates = []
         for art in candidate_art_files:
-            if not self.app.region_allowed(self.local_art_region_text(art)):
+            if respect_regions and not self.app.region_allowed(self.local_art_region_text(art)):
                 continue
             score = title_match_score(match_query, art.title)
             if score >= 2.2 and title_search_compatible(match_query, art.title):
@@ -1341,7 +1342,7 @@ class Providers:
                 # Parent directories describe pack organization, not the
                 # release represented by this image.
                 variant_rank(item[1].path.name),
-                self.app.region_priority(self.local_art_region_text(item[1])),
+                self.app.region_priority(self.local_art_region_text(item[1])) if respect_regions else 0,
                 -item[0],
                 item[1].path.name.casefold(),
             ),
@@ -1349,7 +1350,10 @@ class Providers:
         if not candidates and (candidate_art_files or not query_tokens):
             fallback_index = build_art_index(candidate_art_files) if query_tokens else search_index
             art = find_best_art(match_query, fallback_index)
-            candidates = [(99, art)] if art and self.app.region_allowed(self.local_art_region_text(art)) else []
+            candidates = [
+                (99, art) for art in [art]
+                if art and (not respect_regions or self.app.region_allowed(self.local_art_region_text(art)))
+            ]
         limit = len(candidates) if max_results is None else max_results
         results = [
             ProviderResult("Local Pack", self.local_art_label(art, pack_path), art.path.read_bytes(), system)
@@ -2491,7 +2495,9 @@ class ThumbnailScraperApp(tk.Tk):
         self.preview_controls_scrollbar = ttk.Scrollbar(
             controls_panel, orient="vertical", command=self.preview_controls_canvas.yview,
         )
-        self.preview_controls_scrollbar.grid(row=0, column=1, sticky="ns")
+        # Keep a visible gutter between the scroll thumb and the packed controls;
+        # ttk themes can draw the scrollbar close enough to appear over button edges.
+        self.preview_controls_scrollbar.grid(row=0, column=1, sticky="ns", padx=(5, 2), pady=2)
         self.preview_controls_canvas.configure(yscrollcommand=self.preview_controls_scrollbar.set)
         controls = ttk.Frame(self.preview_controls_canvas, style="Panel.TFrame")
         self.preview_controls_window = self.preview_controls_canvas.create_window(
@@ -3326,6 +3332,9 @@ class ThumbnailScraperApp(tk.Tk):
         self.status_var.set("Cleared unmatched SD card games.")
 
     def clear_active_sd_scan_game(self, event=None):
+        # Return submits the selected queue entry; it must retain its removal context.
+        if event is not None and event.keysym in {"Return", "KP_Enter", "Enter", "Tab", "Up", "Down", "Escape"}:
+            return
         # Editing the query means the selected queue entry is no longer the search target.
         self.active_sd_scan_game = None
 
@@ -4186,9 +4195,14 @@ class ThumbnailScraperApp(tk.Tk):
                         f"{candidate.system}: {candidate.path.name}",
                     )
                 try:
-                    local_results = local_search(
-                        strip_nointro_tags(candidate.title), max_results=1, system=candidate.system
-                    )
+                    query_title = strip_nointro_tags(candidate.title)
+                    try:
+                        local_results = local_search(
+                            query_title, max_results=1, system=candidate.system,
+                            respect_regions=False,
+                        )
+                    except TypeError:
+                        local_results = local_search(query_title, max_results=1, system=candidate.system)
                     if local_results and is_valid_image_data(local_results[0].image_data):
                         local_pack_matches[candidate.relative.casefold()] = local_results[0]
                 except Exception:
@@ -4359,6 +4373,30 @@ class ThumbnailScraperApp(tk.Tk):
                     )
                 )
             except Exception as exc:
+                # Local artwork is also a final fallback when local-first is off.
+                # Region preferences guide interactive search, but an installed
+                # game scan should use any matching image already on disk.
+                if pack_setting is not None and pack_setting.get().strip() and callable(local_search):
+                    try:
+                        try:
+                            local_results = local_search(
+                                query_title, max_results=1, system=candidate.system,
+                                respect_regions=False,
+                            )
+                        except TypeError:
+                            # Compatibility for older provider adapters.
+                            local_results = local_search(query_title, max_results=1, system=candidate.system)
+                        if local_results and is_valid_image_data(local_results[0].image_data):
+                            result = local_results[0]
+                            matches.append(
+                                SdArtworkMatch(
+                                    candidate.path, candidate.system, result.label,
+                                    candidate.relative, "Local Pack", result.image_data,
+                                )
+                            )
+                            continue
+                    except Exception:
+                        pass
                 # Opt-in hashing runs only after existing outputs, local image cache,
                 # Libretro name matching, and the full online name fallback chain miss.
                 if use_hash_matching:

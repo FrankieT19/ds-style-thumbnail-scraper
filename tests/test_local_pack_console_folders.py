@@ -166,6 +166,29 @@ class FolderAliasTests(unittest.TestCase):
             with self.subTest(folder=folder):
                 self.assertEqual(APP_MODULE.local_pack_folder_owners(folder), (frozenset(), frozenset()))
 
+    def test_sd_scan_lookup_can_use_world_art_when_region_filter_excludes_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "Neo Geo Pocket Color"
+            art = root / "Crush Roller (World) (En,Ja).png"
+            art.parent.mkdir(parents=True)
+            art.write_bytes(png_bytes((10, 30, 50)))
+            app = SimpleNamespace(
+                local_pack_var=Value(str(root)),
+                region_allowed=lambda _title: False,
+                region_priority=lambda _title: 0,
+            )
+            providers = APP_MODULE.Providers(app)
+
+            with self.assertRaises(LookupError):
+                providers.search_local_pack_many(
+                    "Crush Roller (World) (En,Ja)", 1, "Neo Geo Pocket", respect_regions=True
+                )
+            result = providers.search_local_pack_many(
+                "Crush Roller (World) (En,Ja)", 1, "Neo Geo Pocket", respect_regions=False
+            )[0]
+
+            self.assertEqual(result.image_data, art.read_bytes())
+
 
 class CrossConsoleMatchingTests(unittest.TestCase):
     def test_every_alias_prefers_its_own_console_over_same_title_art_elsewhere(self):

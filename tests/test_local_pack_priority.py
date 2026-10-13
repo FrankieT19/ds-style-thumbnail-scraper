@@ -37,6 +37,20 @@ def png_bytes(color):
 
 
 class LocalPackPriorityTests(unittest.TestCase):
+    def test_return_keeps_selected_scan_game_attached_to_manual_search(self):
+        game = {"title": "Crush Roller.ngc", "system": "Neo Geo Pocket", "path": "sd/Crush Roller.ngc"}
+        app = SimpleNamespace(active_sd_scan_game=game)
+
+        APP_MODULE.ThumbnailScraperApp.clear_active_sd_scan_game(
+            app, SimpleNamespace(keysym="Return")
+        )
+        self.assertIs(app.active_sd_scan_game, game)
+
+        APP_MODULE.ThumbnailScraperApp.clear_active_sd_scan_game(
+            app, SimpleNamespace(keysym="a")
+        )
+        self.assertIsNone(app.active_sd_scan_game)
+
     def test_parent_variant_named_folders_do_not_penalize_retail_art(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
