@@ -44,8 +44,9 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Thumbnail Scraper"
-APP_VERSION = "1.10.5"
-OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper output"
+APP_VERSION = "1.10.9"
+OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper Output"
+THUMBNAIL_PACKS_FOLDER_NAME = "Thumbnail Packs"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
 CONFIG_NAME = "thumbnail_scraper_settings.json"
 DEFAULT_SEARCH = "Mario Kart - Super Circuit"
@@ -634,6 +635,7 @@ class ProviderResult:
     label: str
     image_data: bytes
     system: str = DEFAULT_SYSTEM
+    source_path: str | None = None
 
 
 @dataclass
@@ -678,6 +680,7 @@ class SdArtworkMatch:
     relative: str
     provider: str = "Libretro"
     image_data: bytes | None = None
+    source_path: str | None = None
 
 
 class OperationProgressWindow:
@@ -1359,7 +1362,13 @@ class Providers:
             ]
         limit = len(candidates) if max_results is None else max_results
         results = [
-            ProviderResult("Local Pack", self.local_art_label(art, pack_path), art.path.read_bytes(), system)
+            ProviderResult(
+                "Local Pack",
+                self.local_art_label(art, pack_path),
+                art.path.read_bytes(),
+                system,
+                str(art.path),
+            )
             for _score, art in candidates[:limit]
             if art
         ]
@@ -2185,7 +2194,6 @@ class ThumbnailScraperApp(tk.Tk):
         self.after(50, self._enable_dark_title_bar)
         self._load_settings()
         self._load_game_names_async()
-        self.after(250, self.build_preview_search)
 
     def _show_text_context_menu(self, event):
         widget = event.widget
@@ -2275,6 +2283,7 @@ class ThumbnailScraperApp(tk.Tk):
         style.configure("TLabel", background=surface, foreground="#f4f8fc", font=("Segoe UI", 10))
         style.configure("Section.TLabel", background=surface, foreground="#ffffff", font=("Segoe UI", 12, "bold"))
         style.configure("Muted.TLabel", background=surface, foreground="#aebfd2", font=("Segoe UI", 10))
+        style.configure("SettingsSaved.TLabel", background=surface, foreground="#65d68a", font=("Segoe UI", 13, "bold"))
         style.configure("TButton", background=control, foreground="#f4f8fc", borderwidth=0, focusthickness=0, focuscolor=control, relief="flat", font=BUTTON_FONT, padding=BUTTON_PADDING)
         style.map("TButton", background=[("active", "#263a57"), ("pressed", "#1c2b41"), ("focus", control)], foreground=[("disabled", "#718196")], relief=[("pressed", "flat"), ("!pressed", "flat")])
         style.configure("Accent.TButton", background="#2a5caa", foreground="#ffffff", borderwidth=0, focusthickness=0, focuscolor="#2a5caa", relief="flat", font=BUTTON_FONT, padding=BUTTON_PADDING)
@@ -2422,9 +2431,15 @@ class ThumbnailScraperApp(tk.Tk):
 
         footer = ttk.Frame(self, style="TFrame", padding=(18, 0, 18, 10))
         footer.pack(fill="x")
-        self.status_label = ttk.Label(footer, textvariable=self.status_var, style="Sub.TLabel", wraplength=900)
+        # Keep the footer's requested height independent of status message length.
+        self.status_label = ttk.Label(
+            footer,
+            textvariable=self.status_var,
+            style="Sub.TLabel",
+            wraplength=0,
+            height=1,
+        )
         self.status_label.pack(side="left", fill="x", expand=True)
-        footer.bind("<Configure>", lambda event: self.status_label.configure(wraplength=max(260, event.width - 36)))
 
     def _set_window_icon(self):
         bundled_dir = Path(getattr(sys, "_MEIPASS", self.base_dir))
@@ -2491,8 +2506,13 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Label(controls, text="Thumbnail Size").pack(anchor="w", pady=(12, 4))
         build_size_combo = ttk.Combobox(controls, textvariable=self.size_var, values=["80x80", "120x80"], state="readonly", width=20)
         build_size_combo.pack(anchor="w")
-        build_size_combo.bind("<<ComboboxSelected>>", lambda _event: (self.update_build_preview(), self.update_preview()))
-        ttk.Checkbutton(controls, text="Build exceptions only", variable=self.exceptions_only_var).pack(anchor="w", pady=(14, 0))
+        build_size_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_build_size_change())
+        ttk.Checkbutton(
+            controls,
+            text="Build exceptions only",
+            variable=self.exceptions_only_var,
+            command=self.ensure_build_preview_after_interaction,
+        ).pack(anchor="w", pady=(14, 0))
         self.build_button = ttk.Button(controls, text="Build Pack", style="Accent.TButton", command=self.build_pack)
         self.build_button.pack(anchor="w", fill="x", pady=(22, 0))
         self.cancel_build_button = ttk.Button(controls, text="Cancel Build", command=self.cancel_build)
@@ -2508,9 +2528,22 @@ class ThumbnailScraperApp(tk.Tk):
         middle = ttk.Frame(self.build_tab, style="Panel.TFrame")
         middle.pack(side="left", fill="y", padx=(0, 18))
         ttk.Label(middle, text="Preview", style="Section.TLabel").pack(anchor="w")
-        self.build_preview_label = tk.Label(middle, bg="#101a29", fg="#aebfd2", text="Loading preview…", width=42, height=12, font=("Segoe UI", 10))
+        self.build_preview_label = tk.Label(
+            middle,
+            bg="#101a29",
+            fg="#aebfd2",
+            text="Preview loads when you\nchange a pack option or\nclick Refresh Preview.",
+            width=42,
+            height=12,
+            font=("Segoe UI", 10),
+        )
         self.build_preview_label.pack(anchor="w", pady=(10, 8))
-        self.build_preview_info = ttk.Label(middle, text="Loading preview…", style="Muted.TLabel", wraplength=280)
+        self.build_preview_info = ttk.Label(
+            middle,
+            text="Change an artwork option or click Refresh Preview.",
+            style="Muted.TLabel",
+            wraplength=280,
+        )
         self.build_preview_info.pack(anchor="w")
         self.build_preview_loading = ttk.Progressbar(middle, mode="indeterminate", length=180)
         self.build_preview_loading.pack(anchor="w", pady=(6, 0))
@@ -2520,7 +2553,23 @@ class ThumbnailScraperApp(tk.Tk):
         self.build_pack_crop_label.pack(anchor="w", pady=(16, 6))
         for label, var, from_, to in (("Zoom", self.build_zoom_var, 1.0, 3.0), ("Move X", self.build_crop_x_var, -100, 100), ("Move Y", self.build_crop_y_var, -100, 100)):
             ttk.Label(middle, text=label).pack(anchor="w")
-            tk.Scale(middle, variable=var, from_=from_, to=to, resolution=0.05 if label == "Zoom" else 1, orient="horizontal", bg="#152235", fg="#edf4fb", troughcolor="#101a29", activebackground="#263a57", highlightthickness=0, command=lambda _v: self.update_build_preview()).pack(fill="x")
+            tk.Scale(
+                middle,
+                variable=var,
+                from_=from_,
+                to=to,
+                resolution=0.05 if label == "Zoom" else 1,
+                orient="horizontal",
+                bg="#152235",
+                fg="#edf4fb",
+                troughcolor="#101a29",
+                activebackground="#263a57",
+                highlightthickness=0,
+                command=lambda _value: (
+                    self.update_build_preview(),
+                    self.ensure_build_preview_after_interaction(),
+                ),
+            ).pack(fill="x")
         ttk.Button(middle, text="Refresh Preview", command=self.build_preview_search).pack(anchor="w", fill="x", pady=(10, 0))
 
         right = ttk.Frame(self.build_tab, style="Panel.TFrame")
@@ -2729,7 +2778,7 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Label(self.custom_tab, text="Artwork Entries", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         self.custom_description_label = ttk.Label(
             self.custom_tab,
-            text="Add artwork for games found on your SD card. 'Mirrored' preserves full game library paths; 'Custom' uses a single folder with a 255 total limit.",
+            text="Add artwork for games found on your SD card. 'Mirrored' preserves full game library paths; 'Custom' uses a single folder with a 255 total file limit.",
             style="Muted.TLabel",
             wraplength=1000,
         )
@@ -2772,7 +2821,8 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Button(actions, text="Add ROMs…", command=self.add_custom_roms).pack(anchor="w", fill="x", pady=(0, 8))
         ttk.Button(actions, text="Add Name…", command=self.add_custom_name).pack(anchor="w", fill="x", pady=(0, 8))
         ttk.Button(actions, text="Set Image…", command=self.set_custom_image).pack(anchor="w", fill="x", pady=(0, 8))
-        ttk.Button(actions, text="Remove Selected", command=self.remove_custom_roms).pack(anchor="w", fill="x", pady=(0, 16))
+        ttk.Button(actions, text="Remove Selected", command=self.remove_custom_roms).pack(anchor="w", fill="x", pady=(0, 8))
+        ttk.Button(actions, text="Clear All", command=self.clear_all_custom_roms).pack(anchor="w", fill="x", pady=(0, 16))
         ttk.Label(actions, text="Thumbnail Size").pack(anchor="w")
         custom_size_combo = ttk.Combobox(actions, textvariable=self.size_var, values=["80x80", "120x80"], state="readonly", width=18)
         custom_size_combo.pack(anchor="w", fill="x", pady=(4, 12))
@@ -2956,7 +3006,23 @@ class ThumbnailScraperApp(tk.Tk):
             text="ScreenScraper API access",
             command=lambda: webbrowser.open("https://www.screenscraper.fr/webapi2.php"),
         ).pack(side="left", padx=(0, 8))
-        ttk.Button(actions, text="Save Settings", style="Accent.TButton", command=self.save_settings).pack(side="left")
+        ttk.Button(
+            actions,
+            text="Save Settings",
+            style="Accent.TButton",
+            command=self.save_settings_from_button,
+        ).pack(side="left")
+        self.settings_saved_indicator = ttk.Label(actions, text="", style="SettingsSaved.TLabel")
+        self.settings_saved_indicator.pack(side="left", padx=(8, 0))
+
+    def save_settings_from_button(self):
+        self.settings_saved_indicator.configure(text="")
+        try:
+            self.save_settings()
+        except (OSError, TypeError, ValueError) as exc:
+            self.status_var.set(f"Could not save settings: {exc}")
+            return
+        self.settings_saved_indicator.configure(text="✓")
 
     def toggle_tgdb_key_visibility(self):
         if not self.tgdb_key_entry or not self.tgdb_key_reveal_button:
@@ -3233,6 +3299,21 @@ class ThumbnailScraperApp(tk.Tk):
         # Saving serializes all custom-art entries; debounce rapid checkbox edits so
         # the UI does not repeatedly rewrite a potentially large settings file.
         self._schedule_settings_save()
+        self.ensure_build_preview_after_interaction()
+
+    def on_build_size_change(self):
+        self.update_build_preview()
+        self.update_preview()
+        self.ensure_build_preview_after_interaction()
+
+    def ensure_build_preview_after_interaction(self):
+        """Load the initial GBA preview after the user first changes a pack control."""
+        if not hasattr(self, "build_preview_label") or self.build_source_image is not None:
+            return
+        if getattr(self, "_build_preview_worker_running", False):
+            return
+        if getattr(self, "_build_preview_after_id", None) is None:
+            self.build_preview_search()
 
     def _schedule_settings_save(self, delay: int = 550):
         pending = getattr(self, "_settings_save_after_id", None)
@@ -4058,17 +4139,26 @@ class ThumbnailScraperApp(tk.Tk):
         """
         _width, _height, folder_name = self.size_details(size)
         output_roots = [Path(root) / "SYSTEM" / folder_name, Path(root) / folder_name]
-        generated_root = self.base_dir / OUTPUT_FOLDER_NAME
-        if generated_root.is_dir():
+        generated_roots = (
+            self.base_dir / OUTPUT_FOLDER_NAME,
+            # Continue reusing complete artwork made before the folder rename.
+            self.base_dir / "DS Style Thumbnail Scraper output",
+        )
+        previous_runs = []
+        for generated_root in generated_roots:
+            if not generated_root.is_dir():
+                continue
             try:
-                previous_runs = sorted(
-                    (entry for entry in generated_root.iterdir() if entry.is_dir()),
-                    key=lambda entry: entry.name.casefold(),
-                    reverse=True,
-                )
+                children = [entry for entry in generated_root.iterdir() if entry.is_dir()]
+                for child in children:
+                    if child.name.casefold() == THUMBNAIL_PACKS_FOLDER_NAME.casefold():
+                        previous_runs.extend(entry for entry in child.iterdir() if entry.is_dir())
+                    else:
+                        previous_runs.append(child)
             except OSError:
-                previous_runs = []
-            output_roots.extend(run / folder_name for run in previous_runs)
+                continue
+        previous_runs.sort(key=lambda entry: entry.name.casefold(), reverse=True)
+        output_roots.extend(run / folder_name for run in previous_runs)
         return output_roots
 
     def existing_sd_thumbnail(
@@ -4376,6 +4466,7 @@ class ThumbnailScraperApp(tk.Tk):
                         candidate.relative,
                         "Local Pack",
                         local_result.image_data,
+                        local_result.source_path,
                     )
                 )
                 continue
@@ -4486,6 +4577,7 @@ class ThumbnailScraperApp(tk.Tk):
                                 SdArtworkMatch(
                                     candidate.path, candidate.system, result.label,
                                     candidate.relative, "Local Pack", result.image_data,
+                                    result.source_path,
                                 )
                             )
                             continue
@@ -4534,6 +4626,11 @@ class ThumbnailScraperApp(tk.Tk):
                         "relative": candidate.relative,
                     })
 
+        provider_by_relative = {
+            match.relative.casefold(): match.provider
+            for match in matches
+        }
+
         # Cache identity includes the provider, console and Libretro art folder.
         # The same title can therefore have separate images from each provider.
         match_key = lambda match: (match.provider, match.system, match.art_name)
@@ -4573,16 +4670,9 @@ class ThumbnailScraperApp(tk.Tk):
             cache_path = self.sd_scan_cache_path(cache_source, system, art_name)
             cache_paths[key] = cache_path
             match = matches_by_art[key]
-            if provider == "Local Pack" and match.image_data:
-                # Always refresh scraper cache copies from a selected local-pack source.
-                downloaded[key] = match.image_data
-                try:
-                    self.cache_sd_scan_image(cache_path, match.image_data, overwrite=True)
-                    downloaded[key] = cache_path.read_bytes()
-                except Exception as exc:
-                    download_errors.append(
-                        f"{system}: {display_libretro_name(art_name)} (local-pack cache refresh failed: {exc})"
-                    )
+            if provider == "Local Pack" and match.source_path:
+                # Keep local-pack files as read-only sources; the thumbnail
+                # builder opens this path directly instead of caching a copy.
                 continue
             if provider == "Cached" and match.image_data:
                 # The per-ROM cache was already checked before any provider query.
@@ -4706,6 +4796,7 @@ class ThumbnailScraperApp(tk.Tk):
                                     )
                                 if not fallback or not is_valid_image_data(fallback[0].image_data):
                                     raise LookupError("No fallback provider returned usable image data")
+                                provider_by_relative[matches_by_art[key].relative.casefold()] = fallback[0].provider
                                 data = fallback[0].image_data
                                 downloaded[key] = data
                                 cache_path = cache_paths[key]
@@ -4740,6 +4831,12 @@ class ThumbnailScraperApp(tk.Tk):
 
         additions: list[CustomRomItem] = []
         matched_files = len(matches)
+        provider_matches: dict[str, list[str]] = {}
+        for match in matches:
+            provider = provider_by_relative.get(match.relative.casefold(), match.provider)
+            provider_matches.setdefault(provider, []).append(match.relative)
+        for paths in provider_matches.values():
+            paths.sort(key=str.casefold)
         for match_index, match in enumerate(matches, start=1):
             if match_index == 1 or match_index % 10 == 0 or match_index == len(matches):
                 report(
@@ -4752,39 +4849,44 @@ class ThumbnailScraperApp(tk.Tk):
             if not needed_sizes.get(relative_key):
                 continue
             key_art = match_key(match)
-            data = downloaded.get(key_art)
-            if not data:
-                continue
-            # Persist the selected source image by ROM identity, independent of
-            # provider name/label. The next scan checks this before online lookup.
-            rom_cache_path = self.sd_scan_rom_cache_path(folder, match.system, match.relative)
-            try:
-                self.cache_sd_scan_image(
-                    rom_cache_path,
-                    data,
-                    overwrite=(local_priority_enabled and match.provider == "Local Pack"),
-                )
-            except Exception as exc:
-                download_errors.append(
-                    f"{match.system}: {match.path.name} (per-ROM cache write failed: {exc})"
-                )
-            cache_source = folder if match.provider == "Libretro" else match.provider
-            provider_cache_path = cache_paths.get(key_art) or self.sd_scan_cache_path(
-                cache_source, match.system, match.art_name
-            )
-            # Custom entries point at the per-ROM cache so subsequent scans can
-            # reuse the exact image before querying providers, even if providers
-            # later rename or remove their search result.
-            image_path = str(rom_cache_path if is_valid_image_file(rom_cache_path) else provider_cache_path)
-            # Cache paths are persistent and deterministic. If writing there
-            # failed, make a best effort to keep a temporary source image cache.
-            if not is_valid_image_file(image_path):
-                try:
-                    image_path = self.cache_provider_result(
-                        ProviderResult(match.provider, match.art_name, data, match.system), cache_source
+            if match.provider == "Local Pack" and match.source_path:
+                image_path = match.source_path
+                if not is_valid_image_file(image_path):
+                    download_errors.append(
+                        f"{match.system}: {match.path.name} (local-pack source is no longer available)"
                     )
-                except Exception:
                     continue
+            else:
+                data = downloaded.get(key_art)
+                if not data:
+                    continue
+                # Persist the selected source image by ROM identity, independent
+                # of provider name/label for future offline scan reuse.
+                rom_cache_path = self.sd_scan_rom_cache_path(folder, match.system, match.relative)
+                try:
+                    self.cache_sd_scan_image(
+                        rom_cache_path,
+                        data,
+                        overwrite=(local_priority_enabled and match.provider == "Local Pack"),
+                    )
+                except Exception as exc:
+                    download_errors.append(
+                        f"{match.system}: {match.path.name} (per-ROM cache write failed: {exc})"
+                    )
+                cache_source = folder if match.provider == "Libretro" else match.provider
+                provider_cache_path = cache_paths.get(key_art) or self.sd_scan_cache_path(
+                    cache_source, match.system, match.art_name
+                )
+                # Custom entries use the per-ROM cache so later scans can reuse
+                # this exact image before querying providers.
+                image_path = str(rom_cache_path if is_valid_image_file(rom_cache_path) else provider_cache_path)
+                if not is_valid_image_file(image_path):
+                    try:
+                        image_path = self.cache_provider_result(
+                            ProviderResult(match.provider, match.art_name, data, match.system), cache_source
+                        )
+                    except Exception:
+                        continue
             for size in needed_sizes[relative_key]:
                 key = (relative_key, size)
                 existing_item = existing_items.get(key)
@@ -4807,6 +4909,7 @@ class ThumbnailScraperApp(tk.Tk):
         return {
             "files": len(files),
             "matched_files": matched_files,
+            "provider_matches": provider_matches,
             "additions": additions,
             "updates": updates,
             "unmatched": unmatched,
@@ -4859,10 +4962,24 @@ class ThumbnailScraperApp(tk.Tk):
         self.clear_sd_scan_games_button.configure(state="normal" if options else "disabled")
         self.sd_scan_game_var.set("")
         self.active_sd_scan_game = None
-        report_lines = [
+        report_lines = []
+        provider_matches = result.get("provider_matches", {})
+        for provider in sorted(provider_matches, key=str.casefold):
+            paths = provider_matches[provider]
+            if not paths:
+                continue
+            count = len(paths)
+            if count < 5:
+                report_lines.append(f"{provider} matched {count} file{'s' if count != 1 else ''}:")
+                report_lines.extend(f"  - {path}" for path in paths)
+            else:
+                report_lines.append(f"{count:,} files were found at {provider}.")
+        if provider_matches and unmatched_games:
+            report_lines.append("")
+        report_lines.extend(
             f"No artwork match found for {game['title']} on any of the media providers."
             for game in unmatched_games
-        ]
+        )
         report_dir = self.base_dir / OUTPUT_FOLDER_NAME / "SD Scan Reports"
         report_dir.mkdir(parents=True, exist_ok=True)
         report_path = report_dir / f"sd_scan_{time.strftime('%Y-%m-%d_%H-%M-%S')}.txt"
@@ -5120,6 +5237,11 @@ class ThumbnailScraperApp(tk.Tk):
         self.custom_roms = [item for index, item in enumerate(self.custom_roms) if index not in indices]
         next_index = min(indices) if self.custom_roms else -1
         self.refresh_custom_roms([min(next_index, len(self.custom_roms) - 1)] if next_index >= 0 else [])
+
+    def clear_all_custom_roms(self):
+        self.custom_roms.clear()
+        self.refresh_custom_roms([])
+        self.save_settings()
 
     def on_custom_output_layout_changed(self):
         self.update_custom_preview()
@@ -5452,8 +5574,8 @@ class ThumbnailScraperApp(tk.Tk):
         return [rule for rule in self.exceptions if clean_title(rule.title).lower() == key]
 
     def output_run_dir(self) -> Path:
-        root = self.base_dir / OUTPUT_FOLDER_NAME
-        root.mkdir(exist_ok=True)
+        root = self.base_dir / OUTPUT_FOLDER_NAME / THUMBNAIL_PACKS_FOLDER_NAME
+        root.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
         run = root / stamp
         counter = 2
