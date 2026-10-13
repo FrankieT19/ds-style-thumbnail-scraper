@@ -2223,9 +2223,9 @@ class ThumbnailScraperApp(tk.Tk):
         style.configure("TLabel", background=surface, foreground="#f4f8fc", font=("Segoe UI", 10))
         style.configure("Section.TLabel", background=surface, foreground="#ffffff", font=("Segoe UI", 12, "bold"))
         style.configure("Muted.TLabel", background=surface, foreground="#aebfd2", font=("Segoe UI", 10))
-        style.configure("TButton", background=control, foreground="#f4f8fc", borderwidth=0, focusthickness=0, focuscolor=control, relief="flat", font=("Segoe UI", 10), padding=(10, 6))
+        style.configure("TButton", background=control, foreground="#f4f8fc", borderwidth=0, focusthickness=0, focuscolor=control, relief="flat", font=("Segoe UI", 10), padding=(8, 4))
         style.map("TButton", background=[("active", "#263a57"), ("pressed", "#1c2b41"), ("focus", control)], foreground=[("disabled", "#718196")], relief=[("pressed", "flat"), ("!pressed", "flat")])
-        style.configure("Accent.TButton", background="#2a5caa", foreground="#ffffff", borderwidth=0, focusthickness=0, focuscolor="#2a5caa", relief="flat", font=("Segoe UI", 10, "bold"), padding=(12, 7))
+        style.configure("Accent.TButton", background="#2a5caa", foreground="#ffffff", borderwidth=0, focusthickness=0, focuscolor="#2a5caa", relief="flat", font=("Segoe UI", 10, "bold"), padding=(10, 5))
         style.map("Accent.TButton", background=[("active", "#3269bf"), ("pressed", "#244f94"), ("focus", "#2a5caa")], relief=[("pressed", "flat"), ("!pressed", "flat")])
         style.configure("TNotebook", background=base, borderwidth=0, tabmargins=(0, 0, 18, 0))
         style.configure("TNotebook", bordercolor=edge, lightcolor=edge, darkcolor=edge)
@@ -2282,18 +2282,6 @@ class ThumbnailScraperApp(tk.Tk):
     def _sync_gallery_canvas_width(self, event):
         self.gallery_canvas.itemconfigure(self.gallery_window, width=max(1, event.width))
         self._sync_gallery_scroll_area()
-
-    def _scroll_gallery(self, event):
-        if self.gallery_ybar.winfo_ismapped():
-            self.gallery_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            return "break"
-        return None
-
-    def _enable_gallery_mousewheel(self, _event=None):
-        self.gallery_canvas.bind_all("<MouseWheel>", self._scroll_gallery)
-
-    def _disable_gallery_mousewheel(self, _event=None):
-        self.gallery_canvas.unbind_all("<MouseWheel>")
 
     def _build_region_order_control(self, parent, scope: str = "build"):
         """Build one region-priority control with a tab-specific update policy."""
@@ -2428,34 +2416,34 @@ class ThumbnailScraperApp(tk.Tk):
         region_options.pack(side="left", fill="y")
 
         ttk.Label(source_options, text="Pack Options", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(source_options, text="Artwork source").pack(anchor="w", pady=(14, 4))
+        ttk.Label(source_options, text="Artwork source").pack(anchor="w", pady=(12, 4))
         build_provider_combo = ttk.Combobox(source_options, textvariable=self.build_provider_var, values=PROVIDER_VALUES, state="readonly", width=20)
         build_provider_combo.pack(anchor="w")
         build_provider_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_build_source_change())
-        ttk.Label(source_options, text="Artwork type").pack(anchor="w", pady=(14, 4))
+        ttk.Label(source_options, text="Artwork type").pack(anchor="w", pady=(12, 4))
         source_combo = ttk.Combobox(source_options, textvariable=self.build_libretro_source_var, values=list(LIBRETRO_SOURCE_FOLDERS), state="readonly", width=20)
         source_combo.pack(anchor="w")
         source_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_build_source_change())
-        ttk.Label(source_options, text="Local pack").pack(anchor="w", pady=(14, 4))
-        ttk.Button(source_options, text="Choose Folder…", command=self.choose_local_pack).pack(anchor="w")
+        ttk.Label(source_options, text="Local pack").pack(anchor="w", pady=(12, 4))
+        ttk.Button(source_options, text="Choose Folder…", command=self.choose_local_pack).pack(anchor="w", fill="x")
         self.local_pack_label = ttk.Label(source_options, text="No local pack selected", style="Muted.TLabel", wraplength=190)
         self.local_pack_label.pack(anchor="w", pady=(6, 0))
-        ttk.Label(source_options, text="Thumbnail size").pack(anchor="w", pady=(14, 4))
+        ttk.Label(source_options, text="Thumbnail size").pack(anchor="w", pady=(12, 4))
         build_size_combo = ttk.Combobox(source_options, textvariable=self.size_var, values=["80x80", "120x80"], state="readonly", width=20)
         build_size_combo.pack(anchor="w")
         build_size_combo.bind("<<ComboboxSelected>>", lambda _event: (self.update_build_preview(), self.update_preview()))
         ttk.Checkbutton(source_options, text="Build exceptions only", variable=self.exceptions_only_var).pack(anchor="w", pady=(14, 0))
         self.build_button = ttk.Button(source_options, text="Build Thumbnail Pack", style="Accent.TButton", command=self.build_pack)
-        self.build_button.pack(anchor="w", pady=(22, 0))
+        self.build_button.pack(anchor="w", fill="x", pady=(22, 0))
         self.cancel_build_button = ttk.Button(source_options, text="Cancel Build", command=self.cancel_build)
-        self.cancel_build_button.pack(anchor="w", pady=(8, 0))
+        self.cancel_build_button.pack(anchor="w", fill="x", pady=(8, 0))
         self.cancel_build_button.pack_forget()
 
         ttk.Label(region_options, text="Regions", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(region_options, text="Game regions").pack(anchor="w", pady=(14, 4))
+        ttk.Label(region_options, text="Game regions").pack(anchor="w", pady=(12, 4))
         ttk.Label(region_options, text="Choose regions to include in the pack.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
         self._build_rom_region_control(region_options)
-        ttk.Label(region_options, text="Artwork priority").pack(anchor="w", pady=(14, 4))
+        ttk.Label(region_options, text="Artwork priority").pack(anchor="w", pady=(12, 4))
         ttk.Label(region_options, text="Artwork is tried in order when a region has no match.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
         self._build_region_order_control(region_options, scope="build")
 
@@ -2475,7 +2463,7 @@ class ThumbnailScraperApp(tk.Tk):
         for label, var, from_, to in (("Zoom", self.build_zoom_var, 1.0, 3.0), ("Move X", self.build_crop_x_var, -100, 100), ("Move Y", self.build_crop_y_var, -100, 100)):
             ttk.Label(middle, text=label).pack(anchor="w")
             tk.Scale(middle, variable=var, from_=from_, to=to, resolution=0.05 if label == "Zoom" else 1, orient="horizontal", bg="#152235", fg="#edf4fb", troughcolor="#101a29", activebackground="#263a57", highlightthickness=0, command=lambda _v: self.update_build_preview()).pack(fill="x")
-        ttk.Button(middle, text="Refresh Preview", command=self.build_preview_search).pack(anchor="w", pady=(10, 0))
+        ttk.Button(middle, text="Refresh Preview", command=self.build_preview_search).pack(anchor="w", fill="x", pady=(10, 0))
 
         right = ttk.Frame(self.build_tab, style="Panel.TFrame")
         right.pack(side="left", fill="both", expand=True)
@@ -2490,8 +2478,28 @@ class ThumbnailScraperApp(tk.Tk):
 
     def _build_preview_tab(self):
         self.preview_tab.columnconfigure(1, weight=1)
-        controls = ttk.Frame(self.preview_tab, style="Panel.TFrame")
-        controls.grid(row=0, column=0, sticky="nsw", padx=(0, 24))
+        self.preview_tab.rowconfigure(0, weight=1)
+        controls_panel = ttk.Frame(self.preview_tab, style="Panel.TFrame", width=270)
+        controls_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        controls_panel.grid_propagate(False)
+        controls_panel.rowconfigure(0, weight=1)
+        controls_panel.columnconfigure(0, weight=1)
+        self.preview_controls_canvas = tk.Canvas(
+            controls_panel, bg="#152235", highlightthickness=0, bd=0,
+        )
+        self.preview_controls_canvas.grid(row=0, column=0, sticky="nsew")
+        self.preview_controls_scrollbar = ttk.Scrollbar(
+            controls_panel, orient="vertical", command=self.preview_controls_canvas.yview,
+        )
+        self.preview_controls_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.preview_controls_canvas.configure(yscrollcommand=self.preview_controls_scrollbar.set)
+        controls = ttk.Frame(self.preview_controls_canvas, style="Panel.TFrame")
+        self.preview_controls_window = self.preview_controls_canvas.create_window(
+            (0, 0), window=controls, anchor="nw",
+        )
+        self.preview_controls_canvas.bind("<Configure>", self._sync_preview_controls_width)
+        controls.bind("<Configure>", self._sync_preview_controls_scroll_area)
+        self.preview_controls_frame = controls
         ttk.Label(controls, text="Search", style="Section.TLabel").pack(anchor="w")
         ttk.Label(controls, text="Artwork source").pack(anchor="w", pady=(10, 4))
         preview_provider_combo = ttk.Combobox(controls, textvariable=self.preview_provider_var, values=PROVIDER_VALUES, state="readonly", width=24)
@@ -2511,7 +2519,7 @@ class ThumbnailScraperApp(tk.Tk):
         preview_source_combo = ttk.Combobox(controls, textvariable=self.preview_libretro_source_var, values=list(LIBRETRO_SOURCE_FOLDERS), state="readonly", width=24)
         preview_source_combo.pack(anchor="w")
         preview_source_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_preview_source_change())
-        ttk.Button(controls, text="Choose Local Pack…", command=self.choose_local_pack).pack(anchor="w", pady=(10, 0))
+        ttk.Button(controls, text="Choose Local Pack…", command=self.choose_local_pack).pack(fill="x", pady=(10, 0))
         ttk.Label(controls, text="Thumbnail size").pack(anchor="w", pady=(12, 4))
         size_combo = ttk.Combobox(controls, textvariable=self.size_var, values=["80x80", "120x80"], state="readonly", width=24)
         size_combo.pack(anchor="w")
@@ -2520,30 +2528,30 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Label(controls, text="Set the order of artwork results.", style="Muted.TLabel", wraplength=210).pack(anchor="w", pady=(0, 6))
         self._build_region_order_control(controls, scope="preview")
         ttk.Label(controls, text="Game").pack(anchor="w", pady=(12, 4))
-        self.search_entry = ttk.Entry(controls, textvariable=self.search_var, width=34)
-        self.search_entry.pack(anchor="w", pady=(10, 4))
+        self.search_entry = ttk.Entry(controls, textvariable=self.search_var, width=30)
+        self.search_entry.pack(fill="x", pady=(4, 4))
         self.search_entry.bind("<KeyRelease>", self.update_suggestions)
         ttk.Label(controls, text="Games without artwork matches").pack(anchor="w", pady=(10, 4))
         self.sd_scan_game_var = tk.StringVar(value="")
         self.sd_scan_game_combo = ttk.Combobox(
-            controls, textvariable=self.sd_scan_game_var, state="readonly", width=34,
+            controls, textvariable=self.sd_scan_game_var, state="readonly", width=30,
         )
-        self.sd_scan_game_combo.pack(anchor="w")
+        self.sd_scan_game_combo.pack(fill="x")
         self.sd_scan_game_combo.bind("<<ComboboxSelected>>", self.choose_sd_scan_game)
         self.import_sd_scan_report_button = ttk.Button(
             controls, text="Import Scan Report…", command=self.import_sd_scan_report,
         )
-        self.import_sd_scan_report_button.pack(anchor="w", pady=(4, 0))
+        self.import_sd_scan_report_button.pack(fill="x", pady=(4, 0))
         self.clear_sd_scan_games_button = ttk.Button(
             controls, text="Clear Unmatched Games", command=self.clear_sd_scan_games,
         )
-        self.clear_sd_scan_games_button.pack(anchor="w", pady=(4, 0))
+        self.clear_sd_scan_games_button.pack(fill="x", pady=(4, 0))
         self.clear_sd_scan_games_button.configure(state="disabled")
         self.search_entry.bind("<KeyPress>", self.clear_active_sd_scan_game, add="+")
         self.suggestion_box = tk.Listbox(
             controls,
             height=6,
-            width=40,
+            width=30,
             bg="#101a29",
             fg="#edf4fb",
             selectbackground="#263e5d",
@@ -2555,16 +2563,16 @@ class ThumbnailScraperApp(tk.Tk):
         self.suggestion_box.bind("<<ListboxSelect>>", self.choose_suggestion)
         self.suggestion_box.bind("<Return>", self.choose_suggestion)
         self.search_button = ttk.Button(controls, text="Search Artwork", style="Accent.TButton", command=self.preview_search)
-        self.search_button.pack(anchor="w")
+        self.search_button.pack(fill="x")
         ttk.Label(controls, text="Artwork").pack(anchor="w", pady=(12, 4))
-        ttk.Button(controls, text="Use Local Image…", command=self.choose_preview_local).pack(anchor="w", pady=(8, 0))
+        ttk.Button(controls, text="Use Local Image…", command=self.choose_preview_local).pack(fill="x", pady=(4, 0))
         self.add_to_custom_button = ttk.Button(controls, text="Add to Custom Art", command=self.add_preview_to_custom)
-        self.add_to_custom_button.pack(anchor="w", pady=(8, 0))
+        self.add_to_custom_button.pack(fill="x", pady=(4, 0))
         self.add_exception_button = ttk.Button(controls, text="Add GBA Exception", command=self.add_exception)
-        self.add_exception_button.pack(anchor="w", pady=(8, 0))
+        self.add_exception_button.pack(fill="x", pady=(4, 0))
 
         preview = ttk.Frame(self.preview_tab, style="Panel.TFrame")
-        preview.grid(row=0, column=1, sticky="nsew", padx=(0, 20))
+        preview.grid(row=0, column=1, sticky="nsew", padx=(0, 12))
         ttk.Label(preview, text="Preview", style="Section.TLabel").pack(anchor="w")
         self.preview_label = tk.Label(preview, bg="#101a29", width=420, height=300)
         self.preview_label.pack(pady=(12, 0), anchor="nw")
@@ -2582,7 +2590,7 @@ class ThumbnailScraperApp(tk.Tk):
         self.preview_loading = ttk.Progressbar(preview, mode="indeterminate", length=240)
         self.preview_loading.pack(anchor="w", pady=(10, 0))
         self.preview_loading.pack_forget()
-        results = ttk.Frame(self.preview_tab, style="Panel.TFrame", width=360)
+        results = ttk.Frame(self.preview_tab, style="Panel.TFrame", width=320)
         results.grid(row=0, column=2, sticky="nsw")
         results.grid_propagate(False)
         ttk.Label(results, text="Search Results", style="Section.TLabel").pack(anchor="w")
@@ -2600,8 +2608,46 @@ class ThumbnailScraperApp(tk.Tk):
         self.gallery_ybar.grid_remove()
         self.gallery_frame.bind("<Configure>", self._sync_gallery_scroll_area)
         self.gallery_canvas.bind("<Configure>", self._sync_gallery_canvas_width)
-        self.gallery_canvas.bind("<Enter>", self._enable_gallery_mousewheel)
-        self.gallery_canvas.bind("<Leave>", self._disable_gallery_mousewheel)
+        self.bind_all("<Button-4>", self._scroll_preview_controls, add="+")
+        self.bind_all("<Button-5>", self._scroll_preview_controls, add="+")
+        self.bind_all("<MouseWheel>", self._scroll_preview_controls, add="+")
+
+    def _sync_preview_controls_width(self, event):
+        self.preview_controls_canvas.itemconfigure(self.preview_controls_window, width=event.width)
+        self._sync_preview_controls_scroll_area()
+
+    def _sync_preview_controls_scroll_area(self, _event=None):
+        self.preview_controls_canvas.configure(scrollregion=self.preview_controls_canvas.bbox("all"))
+        self.after_idle(self._update_preview_controls_scrollbar)
+
+    def _update_preview_controls_scrollbar(self):
+        first, last = self.preview_controls_canvas.yview()
+        if first <= 0 and last >= 1:
+            self.preview_controls_scrollbar.grid_remove()
+        else:
+            self.preview_controls_scrollbar.grid()
+
+    def _scroll_preview_controls(self, event):
+        try:
+            widget = self.winfo_containing(event.x_root, event.y_root)
+            while widget is not None and widget is not self:
+                if widget is self.preview_controls_canvas or widget is self.gallery_canvas:
+                    canvas = widget
+                    if canvas is self.gallery_canvas and not self.gallery_ybar.winfo_ismapped():
+                        return None
+                    if getattr(event, "num", None) == 4:
+                        delta = -1
+                    elif getattr(event, "num", None) == 5:
+                        delta = 1
+                    else:
+                        delta = -int(event.delta / 120) or (-1 if event.delta > 0 else 1)
+                    canvas.yview_scroll(delta, "units")
+                    return "break"
+                parent = widget.winfo_parent()
+                widget = self.nametowidget(parent) if parent else None
+        except (tk.TclError, KeyError):
+            pass
+        return None
 
     def _build_custom_tab(self):
         self.custom_tab.columnconfigure(0, weight=1)
@@ -2721,7 +2767,7 @@ class ThumbnailScraperApp(tk.Tk):
         exception_ybar.grid_remove()
         self._sync_tree_columns(self.exception_tree, {"title": 0.34, "size": 0.10, "provider": 0.16, "label": 0.40})
         self.exception_scroll_sync = self._sync_tree_scrollbar(self.exception_tree, exception_ybar)
-        ttk.Button(self.exceptions_tab, text="Remove Selected", command=self.remove_exception).pack(anchor="w")
+        ttk.Button(self.exceptions_tab, text="Remove Selected", command=self.remove_exception).pack(anchor="w", fill="x")
 
     def _build_settings_tab(self):
         ttk.Label(self.settings_tab, text="Provider Credentials", style="Section.TLabel").grid(
@@ -3247,7 +3293,7 @@ class ThumbnailScraperApp(tk.Tk):
             self.suggestion_box.insert("end", name)
         if matches:
             if not self.suggestion_box.winfo_ismapped():
-                self.suggestion_box.pack(anchor="w", pady=(0, 8), before=self.search_button)
+                self.suggestion_box.pack(fill="x", pady=(0, 8), before=self.search_button)
         else:
             self.hide_suggestions()
 
