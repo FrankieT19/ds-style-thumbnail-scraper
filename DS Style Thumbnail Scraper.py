@@ -68,7 +68,7 @@ BUILD_PREVIEW_SAMPLES = {
 }
 GBA_IGDB_PLATFORM_ID = 24
 GBA_SCREENSCRAPER_SYSTEM_ID = 12
-PROVIDER_VALUES = ["Libretro", "Local Pack"]
+PROVIDER_VALUES = ["Libretro", "Local Pack", "TheGamesDB", "ScreenScraper", "IGDB"]
 AUTOMATIC_PROVIDER_ORDER = ("Libretro", "TheGamesDB", "ScreenScraper", "IGDB")
 DEFAULT_SYSTEM = "Game Boy Advance"
 LIBRETRO_SYSTEMS = {
@@ -2096,7 +2096,7 @@ class ThumbnailScraperApp(tk.Tk):
         self._saved_provider_credentials = None
         self.exceptions: list[ExceptionRule] = []
         self.custom_roms: list[CustomRomItem] = []
-        self.custom_output_layout_var = tk.StringVar(value="Mirror ROM folders")
+        self.custom_output_layout_var = tk.StringVar(value="Mirrored")
         self.custom_preview_photo = None
         self.running = False
         self.custom_build_running = False
@@ -2421,7 +2421,7 @@ class ThumbnailScraperApp(tk.Tk):
 
         ttk.Label(source_options, text="Pack Options", style="Section.TLabel").pack(anchor="w")
         ttk.Label(source_options, text="Artwork source").pack(anchor="w", pady=(12, 4))
-        build_provider_combo = ttk.Combobox(source_options, textvariable=self.build_provider_var, values=PROVIDER_VALUES, state="readonly", width=20)
+        build_provider_combo = ttk.Combobox(source_options, textvariable=self.build_provider_var, values=self.available_artwork_sources(), postcommand=lambda: self.refresh_artwork_source_values(build_provider_combo), state="readonly", width=20)
         build_provider_combo.pack(anchor="w")
         build_provider_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_build_source_change())
         ttk.Label(source_options, text="Artwork type").pack(anchor="w", pady=(12, 4))
@@ -2437,7 +2437,7 @@ class ThumbnailScraperApp(tk.Tk):
         build_size_combo.pack(anchor="w")
         build_size_combo.bind("<<ComboboxSelected>>", lambda _event: (self.update_build_preview(), self.update_preview()))
         ttk.Checkbutton(source_options, text="Build exceptions only", variable=self.exceptions_only_var).pack(anchor="w", pady=(14, 0))
-        self.build_button = ttk.Button(source_options, text="Build Thumbnail Pack", style="Accent.TButton", command=self.build_pack)
+        self.build_button = ttk.Button(source_options, text="Build Pack", style="Accent.TButton", command=self.build_pack)
         self.build_button.pack(anchor="w", fill="x", pady=(22, 0))
         self.cancel_build_button = ttk.Button(source_options, text="Cancel Build", command=self.cancel_build)
         self.cancel_build_button.pack(anchor="w", fill="x", pady=(8, 0))
@@ -2508,7 +2508,7 @@ class ThumbnailScraperApp(tk.Tk):
         self.preview_controls_frame = controls
         ttk.Label(controls, text="Search", style="Section.TLabel").pack(anchor="w")
         ttk.Label(controls, text="Artwork source").pack(anchor="w", pady=(10, 4))
-        preview_provider_combo = ttk.Combobox(controls, textvariable=self.preview_provider_var, values=PROVIDER_VALUES, state="readonly", width=24)
+        preview_provider_combo = ttk.Combobox(controls, textvariable=self.preview_provider_var, values=self.available_artwork_sources(), postcommand=lambda: self.refresh_artwork_source_values(preview_provider_combo), state="readonly", width=24)
         preview_provider_combo.pack(anchor="w")
         preview_provider_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_preview_source_change())
         ttk.Label(controls, text="System").pack(anchor="w", pady=(12, 4))
@@ -2661,7 +2661,7 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Label(self.custom_tab, text="Artwork Entries", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(
             self.custom_tab,
-            text="Add artwork for games on your SD card. Mirrored folders preserve ROM paths; Legacy CUSTOM uses a flat folder. ROM files are never changed.",
+            text="Add artwork for games found on your SD card. 'Mirrored' preserves full game library paths; 'Custom' uses a single folder with a 255 total limit.",
             style="Muted.TLabel",
             wraplength=760,
         ).grid(row=1, column=0, sticky="w", pady=(8, 14))
@@ -2707,15 +2707,14 @@ class ThumbnailScraperApp(tk.Tk):
         custom_size_combo = ttk.Combobox(actions, textvariable=self.size_var, values=["80x80", "120x80"], state="readonly", width=18)
         custom_size_combo.pack(anchor="w", fill="x", pady=(4, 12))
         custom_size_combo.bind("<<ComboboxSelected>>", lambda _event: self.apply_custom_size_to_selection())
-        ttk.Label(actions, text="Name (Legacy CUSTOM)").pack(anchor="w")
+        ttk.Label(actions, text="Name (Custom)").pack(anchor="w")
         self.custom_code_var = tk.StringVar()
         ttk.Entry(actions, textvariable=self.custom_code_var, width=22).pack(anchor="w", fill="x", pady=(4, 8))
-        ttk.Label(actions, text="Mirrored artwork uses the ROM filename and folder path.", style="Muted.TLabel", wraplength=170).pack(anchor="w", pady=(0, 4))
         ttk.Label(actions, text="Output layout").pack(anchor="w")
         custom_layout_combo = ttk.Combobox(
             actions,
             textvariable=self.custom_output_layout_var,
-            values=["Mirror ROM folders", "Legacy CUSTOM"],
+            values=["Mirrored", "Custom"],
             state="readonly",
             width=18,
         )
@@ -2723,7 +2722,7 @@ class ThumbnailScraperApp(tk.Tk):
         custom_layout_combo.bind("<<ComboboxSelected>>", lambda _event: self.on_custom_output_layout_changed())
         ttk.Label(
             actions,
-            text="Mirror ROM folders to avoid the 256-image limit. System defaults (gb.bmp, nes.bmp) stay in CUSTOM.",
+            text="Mirrored artwork follows game library paths. Custom artwork uses one folder and supports up to 255 files.",
             style="Muted.TLabel",
             wraplength=170,
         ).pack(anchor="w", pady=(0, 8))
@@ -2750,7 +2749,7 @@ class ThumbnailScraperApp(tk.Tk):
         custom_footer.grid(row=3, column=0, sticky="ew", pady=(12, 0))
         self.build_custom_art_button = ttk.Button(
             custom_footer,
-            text="Build Art Pack",
+            text="Build Pack",
             style="Accent.TButton",
             command=self.build_custom_rom_output,
         )
@@ -3209,6 +3208,17 @@ class ThumbnailScraperApp(tk.Tk):
     def on_build_source_change(self):
         self.save_settings()
         self.build_preview_search()
+
+    def available_artwork_sources(self):
+        sources = ["Libretro", "Local Pack"]
+        sources.extend(
+            provider for provider in ("TheGamesDB", "ScreenScraper", "IGDB")
+            if self.providers.provider_is_configured(provider)
+        )
+        return sources
+
+    def refresh_artwork_source_values(self, combo):
+        combo.configure(values=self.available_artwork_sources())
 
     def on_preview_source_change(self):
         self.save_settings()
@@ -5036,11 +5046,11 @@ class ThumbnailScraperApp(tk.Tk):
             messagebox.showwarning(APP_NAME, str(exc))
             return
         item = self.custom_roms[indices[0]]
-        if self.custom_output_layout_var.get() == "Mirror ROM folders" and self.custom_art_relative_path(item):
+        if self.custom_output_layout_var.get() == "Mirrored" and self.custom_art_relative_path(item):
             messagebox.showinfo(
                 APP_NAME,
                 "Mirrored artwork always uses the ROM's actual filename and relative folder. "
-                "Rename the ROM and scan again to change its path. The custom name applies to Legacy CUSTOM artwork.",
+                "Rename the ROM and scan again to change its path. The custom name applies to Custom artwork.",
             )
             return
         size = item.size
@@ -5049,7 +5059,7 @@ class ThumbnailScraperApp(tk.Tk):
             for index, other in enumerate(self.custom_roms)
             if index != indices[0]
             and (
-                self.custom_output_layout_var.get() == "Legacy CUSTOM"
+                self.custom_output_layout_var.get() == "Custom"
                 or not self.custom_art_relative_path(other)
             )
         }
@@ -5085,7 +5095,7 @@ class ThumbnailScraperApp(tk.Tk):
             folder_name = self.size_details(item.size)[2]
             layout = self.custom_output_layout_var.get()
             relative = self.custom_art_relative_path(item)
-            if layout == "Mirror ROM folders" and relative:
+            if layout == "Mirrored" and relative:
                 mirrored = mirrored_thumbnail_path(Path(folder_name), relative)
                 self.custom_preview_info.configure(text=f"{mirrored.as_posix()} ({item.size})")
             else:
@@ -5113,19 +5123,18 @@ class ThumbnailScraperApp(tk.Tk):
             # Validate all destinations before doing any disk writes. This catches
             # collisions in legacy CUSTOM mode before the progress window opens.
             for index, item in enumerate(self.custom_roms):
-                relative = self.custom_art_relative_path(item) if layout == "Mirror ROM folders" else ""
+                relative = self.custom_art_relative_path(item) if layout == "Mirrored" else ""
                 if relative:
                     mirror_entries[index] = relative
                 elif not self.is_extension_default_name(item.new_code):
                     custom_entries[item.size].add(item.new_code.casefold())
 
-            over_limit = [size for size, names in custom_entries.items() if len(names) > 256]
-            if over_limit:
-                labels = ", ".join(over_limit)
+            custom_file_count = sum(len(names) for names in custom_entries.values())
+            if custom_file_count > 255:
                 messagebox.showwarning(
                     APP_NAME,
-                    f"Legacy CUSTOM exceeds its 256-image limit for: {labels}.\n\n"
-                    "Use Mirror ROM folders for ROM-matched artwork, or reduce name-only artwork to 256 images per size. "
+                    f"Custom output exceeds its 255-file total limit ({custom_file_count} files).\n\n"
+                    "Use Mirrored output for ROM-matched artwork, or reduce the number of Custom entries. "
                     "System defaults such as gb.bmp and nes.bmp do not count toward the limit.",
                 )
                 return
@@ -5241,7 +5250,7 @@ class ThumbnailScraperApp(tk.Tk):
         self.status_var.set(f"Art pack created: {run_dir}")
         extra = (
             f"\nMirrored files: {made_mirrored}; CUSTOM files: {made_custom}."
-            if layout == "Mirror ROM folders"
+            if layout == "Mirrored"
             else "\nOutput layout: legacy CUSTOM."
         )
         messagebox.showinfo(APP_NAME, f"Art pack created:\n{run_dir}{extra}")
@@ -5581,8 +5590,13 @@ class ThumbnailScraperApp(tk.Tk):
                 self.local_pack_priority_var.set(bool(data.get("local_pack_priority", False)))
             if data.get("build_provider") in PROVIDER_VALUES:
                 self.build_provider_var.set(data["build_provider"])
-            if data.get("custom_output_layout") in {"Mirror ROM folders", "Legacy CUSTOM"}:
-                self.custom_output_layout_var.set(data["custom_output_layout"])
+            saved_layout = data.get("custom_output_layout")
+            if saved_layout in {"Mirrored", "Custom"}:
+                self.custom_output_layout_var.set(saved_layout)
+            elif saved_layout == "Mirror ROM folders":
+                self.custom_output_layout_var.set("Mirrored")
+            elif saved_layout == "Legacy CUSTOM":
+                self.custom_output_layout_var.set("Custom")
             if data.get("preview_provider") in PROVIDER_VALUES:
                 self.preview_provider_var.set(data["preview_provider"])
             if data.get("preview_system") in LIBRETRO_SYSTEMS:
