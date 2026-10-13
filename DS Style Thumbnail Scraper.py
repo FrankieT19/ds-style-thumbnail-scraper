@@ -44,7 +44,7 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Thumbnail Scraper"
-APP_VERSION = "1.10.9"
+APP_VERSION = "1.10.10"
 OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper Output"
 THUMBNAIL_PACKS_FOLDER_NAME = "Thumbnail Packs"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
@@ -2430,14 +2430,15 @@ class ThumbnailScraperApp(tk.Tk):
         self._build_settings_tab()
 
         footer = ttk.Frame(self, style="TFrame", padding=(18, 0, 18, 10))
+        footer.configure(height=34)
         footer.pack(fill="x")
+        footer.pack_propagate(False)
         # Keep the footer's requested height independent of status message length.
         self.status_label = ttk.Label(
             footer,
             textvariable=self.status_var,
             style="Sub.TLabel",
             wraplength=0,
-            height=1,
         )
         self.status_label.pack(side="left", fill="x", expand=True)
 
