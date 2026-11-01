@@ -6,6 +6,7 @@ import re
 import struct
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 
 GOOMBA_STATE_IDS = {0x57A731D8, 0x57A731D9}
@@ -461,7 +462,10 @@ def _normalized_title(title: str) -> str:
     return re.sub(r"[^a-z0-9]", "", title.casefold())
 
 
-def scan_gb_rom_index(root: Path) -> dict[str, dict[int, str]]:
+def scan_gb_rom_index(
+    root: Path,
+    progress_callback: Callable[[int, int, Path], None] | None = None,
+) -> dict[str, dict[int, str]]:
     """Index GB/GBC ROM checksums by normalized cartridge title."""
     index: dict[str, dict[int, str]] = {}
     try:
@@ -472,16 +476,22 @@ def scan_gb_rom_index(root: Path) -> dict[str, dict[int, str]]:
     except OSError as exc:
         raise ValueError(f"Could not scan the SD card for GB/GBC ROMs: {exc}") from exc
 
-    for rom_path in rom_paths:
+    if progress_callback is not None:
+        progress_callback(0, len(rom_paths), root)
+    for current, rom_path in enumerate(rom_paths, start=1):
         try:
             rom = rom_path.read_bytes()
             title = rom_title(rom)
             checksum = rom_checksum(rom)
         except (OSError, ValueError):
+            if progress_callback is not None:
+                progress_callback(current, len(rom_paths), rom_path)
             continue
         key = _normalized_title(title)
         if key:
             index.setdefault(key, {})[checksum] = title
+        if progress_callback is not None:
+            progress_callback(current, len(rom_paths), rom_path)
     return index
 
 

@@ -13,6 +13,7 @@ from goomba_save_converter import (
     lzo1x_literal_compress,
     merge_goomba_archive,
     rom_checksum,
+    scan_gb_rom_index,
 )
 
 
@@ -155,6 +156,24 @@ class GoombaSaveConverterTests(unittest.TestCase):
 
             self.assertEqual(title, "POKEMONCRYS")
             self.assertEqual(checksum, rom_checksum(bytes(rom)))
+
+    def test_rom_index_reports_progress_for_valid_and_invalid_rom_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "broken.gb").write_bytes(b"short")
+            valid_rom = bytearray(0x8000)
+            valid_rom[0x134:0x143] = b"TETRIS DX".ljust(15, b"\0")
+            (root / "tetris.gbc").write_bytes(valid_rom)
+            progress = []
+
+            index = scan_gb_rom_index(
+                root,
+                lambda current, total, path: progress.append((current, total, path)),
+            )
+
+        self.assertIn("tetrisdx", index)
+        self.assertEqual([current for current, _, _ in progress], [0, 1, 2])
+        self.assertTrue(all(total == 2 for _, total, _ in progress))
 
     def test_literal_lzo_rejects_oversized_output(self):
         stream = lzo1x_literal_compress(b"x" * 512)

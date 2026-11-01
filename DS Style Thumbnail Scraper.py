@@ -2189,6 +2189,8 @@ class ThumbnailScraperApp(tk.Tk):
         self.esv_scan_status_var = tk.StringVar(value="Choose an SD card root and scan SYSTEM\\SAVER.")
         self.custom_preview_photo = None
         self.esv_scan_files: list[Path] = []
+        self.esv_scan_file_by_iid: dict[str, Path] = {}
+        self.esv_conversion_running = False
         self.running = False
         self.custom_build_running = False
         self.cancel_build_requested = False
@@ -2196,6 +2198,7 @@ class ThumbnailScraperApp(tk.Tk):
         self.scan_running = False
         self.sd_scan_progress_window: OperationProgressWindow | None = None
         self.custom_art_progress_window: OperationProgressWindow | None = None
+        self.esv_conversion_progress_window: OperationProgressWindow | None = None
         self.tgdb_test_progress_window: OperationProgressWindow | None = None
         self.igdb_test_progress_window: OperationProgressWindow | None = None
         self.ss_test_progress_window: OperationProgressWindow | None = None
@@ -2983,7 +2986,8 @@ class ThumbnailScraperApp(tk.Tk):
                 "ESV archives can contain multiple game saves. Extracted saves go into "
                 "Converted SAV to avoid changing originals; .sav files need matching GB/GBC ROMs "
                 "on the SD card to build an ESV archive. Existing archives are merged so other "
-                "saves and savestates are kept."
+                "saves and savestates are kept. Select the files you want to convert; for SAV → ESV, "
+                "you can also select one existing ESV archive to merge into."
             ),
             style="Muted.TLabel",
             wraplength=900,
@@ -2998,16 +3002,18 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Button(folder_row, text="Choose SD Root…", command=self.choose_esv_sd_root).pack(
             side="left", padx=(8, 0)
         )
-        ttk.Button(folder_row, text="Scan", command=self.scan_esv_saver_folder).pack(
-            side="left", padx=(8, 0)
+        self.esv_scan_button = ttk.Button(
+            folder_row, text="Scan", command=self.scan_esv_saver_folder
         )
+        self.esv_scan_button.pack(side="left", padx=(8, 0))
 
         tree_box = tk.Frame(self.esv_sav_tab, bg="#152235", highlightthickness=0, bd=0)
         tree_box.pack(fill="both", expand=True)
         tree_box.rowconfigure(0, weight=1)
         tree_box.columnconfigure(0, weight=1)
         self.esv_saver_tree = ttk.Treeview(
-            tree_box, columns=("name", "type", "size"), show="headings", height=12,
+            tree_box, columns=("name", "type", "size"), show="headings",
+            selectmode="extended", height=12,
         )
         for column, heading, width in (
             ("name", "File", 450),
@@ -3024,17 +3030,19 @@ class ThumbnailScraperApp(tk.Tk):
 
         controls = ttk.Frame(self.esv_sav_tab, style="Panel.TFrame")
         controls.pack(fill="x", pady=(10, 0))
-        ttk.Button(
+        self.esv_extract_button = ttk.Button(
             controls,
             text="Convert ESV → SAV",
             style="Accent.TButton",
             command=self.convert_esv_files_to_sav,
-        ).pack(side="left")
-        ttk.Button(
+        )
+        self.esv_extract_button.pack(side="left")
+        self.esv_build_button = ttk.Button(
             controls,
             text="Convert SAV → ESV",
             command=self.convert_sav_files_to_esv,
-        ).pack(side="left", padx=(8, 0))
+        )
+        self.esv_build_button.pack(side="left", padx=(8, 0))
         ttk.Label(
             controls, textvariable=self.esv_scan_status_var, style="Muted.TLabel",
         ).pack(side="left", padx=(12, 0), fill="x", expand=True)
@@ -3049,6 +3057,7 @@ class ThumbnailScraperApp(tk.Tk):
         folder = Path(self.esv_saver_folder_var.get().strip())
         if not folder.is_dir():
             self.esv_scan_files = []
+            self.esv_scan_file_by_iid = {}
             if hasattr(self, "esv_saver_tree"):
                 self.esv_saver_tree.delete(*self.esv_saver_tree.get_children())
             self.esv_scan_status_var.set("SAVER folder not found; choose an SD card root.")
@@ -3063,67 +3072,163 @@ class ThumbnailScraperApp(tk.Tk):
                 key=lambda path: path.name.casefold(),
             )
         except OSError as exc:
+            self.esv_scan_files = []
+            self.esv_scan_file_by_iid = {}
+            self.esv_saver_tree.delete(*self.esv_saver_tree.get_children())
             messagebox.showerror(APP_NAME, f"Could not scan {folder}:\n{exc}")
             self.esv_scan_status_var.set("Could not read the SAVER folder.")
             return
 
         self.esv_scan_files = files
+        self.esv_scan_file_by_iid = {}
         self.esv_saver_tree.delete(*self.esv_saver_tree.get_children())
         for path in files:
             try:
                 size = f"{path.stat().st_size:,} bytes"
             except OSError:
                 size = "Unavailable"
-            self.esv_saver_tree.insert(
+            item_id = self.esv_saver_tree.insert(
                 "", "end", values=(path.name, path.suffix[1:].upper(), size)
             )
+            self.esv_scan_file_by_iid[item_id] = path
         self.esv_scan_status_var.set(
             f"Found {sum(path.suffix.casefold() == '.esv' for path in files)} ESV and "
             f"{sum(path.suffix.casefold() == '.sav' for path in files)} SAV files."
         )
 
+    def _selected_esv_saver_files(self, suffix: str) -> list[Path]:
+        return [
+            self.esv_scan_file_by_iid[item_id]
+            for item_id in self.esv_saver_tree.selection()
+            if item_id in self.esv_scan_file_by_iid
+            and self.esv_scan_file_by_iid[item_id].suffix.casefold() == suffix
+        ]
+
+    def _begin_esv_conversion(self, heading: str):
+        if self.esv_conversion_running:
+            return False
+        self.esv_conversion_running = True
+        self.esv_scan_button.configure(state="disabled")
+        self.esv_extract_button.configure(state="disabled")
+        self.esv_build_button.configure(state="disabled")
+        self.esv_conversion_progress_window = OperationProgressWindow(
+            self, "ESV ↔ SAV Conversion", heading
+        )
+        return True
+
+    def _finish_esv_conversion(
+        self,
+        status: str,
+        failures: list[str] | None = None,
+        error: Exception | None = None,
+    ):
+        self.close_operation_progress("esv_conversion_progress_window")
+        self.esv_conversion_running = False
+        self.esv_scan_button.configure(state="normal")
+        self.esv_extract_button.configure(state="normal")
+        self.esv_build_button.configure(state="normal")
+        self.scan_esv_saver_folder()
+        self.esv_scan_status_var.set(status)
+        if error is not None:
+            messagebox.showerror(APP_NAME, f"Save conversion failed:\n{error}")
+        elif failures:
+            messagebox.showwarning(
+                APP_NAME,
+                status + "\n\n" + "\n".join(failures[:12]),
+            )
+
     def convert_esv_files_to_sav(self):
-        esv_files = [path for path in self.esv_scan_files if path.suffix.casefold() == ".esv"]
+        if self.esv_conversion_running:
+            return
+        esv_files = self._selected_esv_saver_files(".esv")
         if not esv_files:
-            messagebox.showinfo(APP_NAME, "Scan a SAVER folder containing .esv files first.")
+            messagebox.showinfo(
+                APP_NAME, "Select one or more .esv files in the scanned list first."
+            )
             return
 
-        converted = 0
-        failures = []
+        if not self._begin_esv_conversion(
+            f"Preparing to extract {len(esv_files):,} selected ESV archive(s)…"
+        ):
+            return
         output_root = Path(self.esv_saver_folder_var.get().strip()) / "Converted SAV"
-        for archive_path in esv_files:
-            try:
-                saves = extract_goomba_saves(archive_path.read_bytes())
-                counts: dict[str, int] = {}
-                for save in saves:
-                    name = save_filename(save.title)
-                    counts[name.casefold()] = counts.get(name.casefold(), 0) + 1
-                game_folder = output_root / archive_path.stem
-                for save in saves:
-                    name = save_filename(save.title)
-                    if counts[name.casefold()] > 1:
-                        name = f"{Path(name).stem}_{save.checksum:08X}.sav"
-                    destination = game_folder / name
-                    if destination.exists():
-                        failures.append(f"{destination}: already exists; left unchanged")
-                        continue
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_bytes(save.data)
-                    converted += 1
-            except (OSError, ValueError) as exc:
-                failures.append(f"{archive_path.name}: {exc}")
 
-        self.scan_esv_saver_folder()
-        status = f"Extracted {converted} SAV file(s) to {output_root}."
-        if failures:
-            status += f" {len(failures)} item(s) were not converted."
-            messagebox.showwarning(APP_NAME, status + "\n\n" + "\n".join(failures[:12]))
-        self.esv_scan_status_var.set(status)
+        def worker():
+            converted = 0
+            failures = []
+            try:
+                total = len(esv_files)
+                for index, archive_path in enumerate(esv_files, start=1):
+                    self.queue_operation_progress(
+                        "esv_conversion_progress_window",
+                        f"Extracting archive {index:,} of {total:,}",
+                        index - 1,
+                        total,
+                        archive_path.name,
+                    )
+                    try:
+                        saves = extract_goomba_saves(archive_path.read_bytes())
+                        counts: dict[str, int] = {}
+                        for save in saves:
+                            name = save_filename(save.title)
+                            counts[name.casefold()] = counts.get(name.casefold(), 0) + 1
+                        game_folder = output_root / archive_path.stem
+                        for save in saves:
+                            name = save_filename(save.title)
+                            if counts[name.casefold()] > 1:
+                                name = f"{Path(name).stem}_{save.checksum:08X}.sav"
+                            destination = game_folder / name
+                            if destination.exists():
+                                failures.append(
+                                    f"{destination}: already exists; left unchanged"
+                                )
+                                continue
+                            destination.parent.mkdir(parents=True, exist_ok=True)
+                            destination.write_bytes(save.data)
+                            converted += 1
+                    except (OSError, ValueError) as exc:
+                        failures.append(f"{archive_path.name}: {exc}")
+                    self.queue_operation_progress(
+                        "esv_conversion_progress_window",
+                        f"Extracting archive {index:,} of {total:,}",
+                        index,
+                        total,
+                        f"Extracted {converted} SAV file(s)",
+                    )
+                status = f"Extracted {converted} SAV file(s) to {output_root}."
+                if failures:
+                    status += f" {len(failures)} item(s) were not converted."
+                self.after(
+                    0,
+                    lambda result=status, issues=failures: self._finish_esv_conversion(
+                        result, issues
+                    ),
+                )
+            except Exception as exc:
+                self.after(0, lambda error=exc: self._finish_esv_conversion("", error=error))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def convert_sav_files_to_esv(self):
-        sav_files = [path for path in self.esv_scan_files if path.suffix.casefold() == ".sav"]
+        if self.esv_conversion_running:
+            return
+        selected_files = [
+            self.esv_scan_file_by_iid[item_id]
+            for item_id in self.esv_saver_tree.selection()
+            if item_id in self.esv_scan_file_by_iid
+        ]
+        sav_files = [path for path in selected_files if path.suffix.casefold() == ".sav"]
         if not sav_files:
-            messagebox.showinfo(APP_NAME, "Scan a SAVER folder containing .sav files first.")
+            messagebox.showinfo(
+                APP_NAME, "Select one or more .sav files in the scanned list first."
+            )
+            return
+
+        selected_esv = [path for path in selected_files if path.suffix.casefold() == ".esv"]
+        if len(selected_esv) > 1:
+            messagebox.showwarning(
+                APP_NAME, "Select at most one existing .esv archive as the merge destination."
+            )
             return
 
         saver_folder = Path(self.esv_saver_folder_var.get().strip())
@@ -3132,35 +3237,6 @@ class ThumbnailScraperApp(tk.Tk):
         else:
             rom_root = saver_folder
 
-        saves = []
-        failures = []
-        seen_checksums: set[int] = set()
-        try:
-            rom_index = scan_gb_rom_index(rom_root)
-        except ValueError as exc:
-            messagebox.showerror(APP_NAME, str(exc))
-            return
-        for save_path in sav_files:
-            try:
-                title, checksum = match_save_to_rom(save_path, rom_index)
-                if checksum in seen_checksums:
-                    failures.append(f"{save_path.name}: another .sav for {title} is already included")
-                    continue
-                seen_checksums.add(checksum)
-                saves.append(GoombaSave(title, save_path.read_bytes(), checksum))
-            except (OSError, ValueError) as exc:
-                failures.append(f"{save_path.name}: {exc}")
-
-        if not saves:
-            status = "No SAV files could be matched to GB/GBC ROMs."
-            self.esv_scan_status_var.set(status)
-            messagebox.showwarning(APP_NAME, status + "\n\n" + "\n".join(failures[:12]))
-            return
-
-        existing_esv = sorted(
-            (path for path in self.esv_scan_files if path.suffix.casefold() == ".esv"),
-            key=lambda path: path.name.casefold(),
-        )
         plugin_folder = saver_folder.parent / "PLUG"
         emulator_stem = next(
             (
@@ -3169,47 +3245,117 @@ class ThumbnailScraperApp(tk.Tk):
             ),
             "gbc",
         )
-        initial_name = (
-            existing_esv[0].name
-            if len(existing_esv) == 1
-            else f"{emulator_stem}.esv"
-        )
-        selected_destination = filedialog.asksaveasfilename(
-            parent=self,
-            title="Save Jagoomba Color ESV",
-            initialdir=str(saver_folder),
-            initialfile=initial_name,
-            defaultextension=".esv",
-            filetypes=[("Jagoomba Color saves", "*.esv")],
-        )
-        if not selected_destination:
-            return
-        destination = Path(selected_destination)
-        if destination.suffix.casefold() != ".esv":
-            destination = destination.with_suffix(".esv")
+        if selected_esv:
+            destination = selected_esv[0]
+        else:
+            selected_destination = filedialog.asksaveasfilename(
+                parent=self,
+                title="Save Jagoomba Color ESV",
+                initialdir=str(saver_folder),
+                initialfile=f"{emulator_stem}.esv",
+                defaultextension=".esv",
+                filetypes=[("Jagoomba Color saves", "*.esv")],
+            )
+            if not selected_destination:
+                return
+            destination = Path(selected_destination)
+            if destination.suffix.casefold() != ".esv":
+                destination = destination.with_suffix(".esv")
         if destination.exists() and not messagebox.askyesno(
             APP_NAME,
             f"Merge these saves into {destination.name}?\nExisting saves and savestates will be kept.",
         ):
             return
-        try:
-            archive = (
-                merge_goomba_archive(destination.read_bytes(), saves)
-                if destination.exists()
-                else build_goomba_archive(saves)
-            )
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(archive)
-        except (OSError, ValueError) as exc:
-            messagebox.showerror(APP_NAME, f"Could not create the ESV archive:\n{exc}")
+
+        if not self._begin_esv_conversion(
+            f"Indexing GB/GBC ROMs for {len(sav_files):,} selected SAV file(s)…"
+        ):
             return
 
-        self.scan_esv_saver_folder()
-        status = f"Added {len(saves)} save(s) to {destination.name}."
-        if failures:
-            status += f" {len(failures)} SAV file(s) were skipped."
-            messagebox.showwarning(APP_NAME, status + "\n\n" + "\n".join(failures[:12]))
-        self.esv_scan_status_var.set(status)
+        def worker():
+            failures = []
+            try:
+
+                def report_rom_progress(current, total, path):
+                    self.queue_operation_progress(
+                        "esv_conversion_progress_window",
+                        "Indexing GB/GBC ROMs",
+                        current,
+                        total,
+                        path.name if current else f"Searching {rom_root}",
+                    )
+
+                rom_index = scan_gb_rom_index(rom_root, report_rom_progress)
+                saves = []
+                seen_checksums: set[int] = set()
+                for index, save_path in enumerate(sav_files, start=1):
+                    self.queue_operation_progress(
+                        "esv_conversion_progress_window",
+                        f"Matching selected SAV file {index:,} of {len(sav_files):,}",
+                        index - 1,
+                        len(sav_files),
+                        save_path.name,
+                    )
+                    try:
+                        title, checksum = match_save_to_rom(save_path, rom_index)
+                        if checksum in seen_checksums:
+                            failures.append(
+                                f"{save_path.name}: another .sav for {title} is already included"
+                            )
+                        else:
+                            seen_checksums.add(checksum)
+                            saves.append(
+                                GoombaSave(title, save_path.read_bytes(), checksum)
+                            )
+                    except (OSError, ValueError) as exc:
+                        failures.append(f"{save_path.name}: {exc}")
+
+                if not saves:
+                    status = "No selected SAV files could be matched to GB/GBC ROMs."
+                    if failures:
+                        status += f" {len(failures)} SAV file(s) were skipped."
+                    self.after(
+                        0,
+                        lambda result=status, issues=failures: self._finish_esv_conversion(
+                            result, issues
+                        ),
+                    )
+                    return
+
+                self.queue_operation_progress(
+                    "esv_conversion_progress_window",
+                    f"Writing {len(saves):,} save(s) to ESV",
+                    0,
+                    1,
+                    destination.name,
+                )
+                archive = (
+                    merge_goomba_archive(destination.read_bytes(), saves)
+                    if destination.exists()
+                    else build_goomba_archive(saves)
+                )
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(archive)
+                status = f"Added {len(saves)} selected save(s) to {destination.name}."
+                if failures:
+                    status += f" {len(failures)} SAV file(s) were skipped."
+                self.queue_operation_progress(
+                    "esv_conversion_progress_window",
+                    f"Finished writing {destination.name}",
+                    1,
+                    1,
+                    status,
+                )
+                self.after(
+                    0,
+                    lambda result=status, issues=failures: self._finish_esv_conversion(
+                        result, issues
+                    ),
+                )
+            except Exception as exc:
+                self.after(0, lambda error=exc: self._finish_esv_conversion("", error=error))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _build_settings_tab(self):
         ttk.Label(self.settings_tab, text="Provider Credentials", style="Section.TLabel").grid(
