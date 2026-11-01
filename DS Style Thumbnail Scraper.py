@@ -2983,8 +2983,8 @@ class ThumbnailScraperApp(tk.Tk):
             self.esv_sav_tab,
             text=(
                 "Scan SYSTEM\\SAVER for Jagoomba .esv archives and .sav files. "
-                "ESV archives can contain multiple game saves. Extracted saves go into "
-                "Converted SAV to avoid changing originals; .sav files need matching GB/GBC ROMs "
+                "ESV archives can contain multiple game saves. Extracted .sav files are placed "
+                "beside their source .esv; .sav files need matching GB/GBC ROMs "
                 "on the SD card to build an ESV archive. Existing archives are merged so other "
                 "saves and savestates are kept. Select the files you want to convert; for SAV → ESV, "
                 "you can also select one existing ESV archive to merge into."
@@ -3025,6 +3025,7 @@ class ThumbnailScraperApp(tk.Tk):
         scrollbar = ttk.Scrollbar(tree_box, orient="vertical", command=self.esv_saver_tree.yview)
         self.esv_saver_tree.configure(yscrollcommand=scrollbar.set)
         self.esv_saver_tree.grid(row=0, column=0, sticky="nsew")
+        self.esv_saver_tree.bind("<<TreeviewSelect>>", self._update_esv_conversion_buttons)
         scrollbar.grid(row=0, column=1, sticky="ns")
         self._sync_tree_columns(self.esv_saver_tree, {"name": 0.68, "type": 0.17, "size": 0.15})
 
@@ -3037,12 +3038,14 @@ class ThumbnailScraperApp(tk.Tk):
             command=self.convert_esv_files_to_sav,
         )
         self.esv_extract_button.pack(side="left")
+        self.esv_extract_button.configure(state="disabled")
         self.esv_build_button = ttk.Button(
             controls,
             text="Convert SAV → ESV",
             command=self.convert_sav_files_to_esv,
         )
         self.esv_build_button.pack(side="left", padx=(8, 0))
+        self.esv_build_button.configure(state="disabled")
         ttk.Label(
             controls, textvariable=self.esv_scan_status_var, style="Muted.TLabel",
         ).pack(side="left", padx=(12, 0), fill="x", expand=True)
@@ -3060,6 +3063,7 @@ class ThumbnailScraperApp(tk.Tk):
             self.esv_scan_file_by_iid = {}
             if hasattr(self, "esv_saver_tree"):
                 self.esv_saver_tree.delete(*self.esv_saver_tree.get_children())
+                self._update_esv_conversion_buttons()
             self.esv_scan_status_var.set("SAVER folder not found; choose an SD card root.")
             return
 
@@ -3075,6 +3079,7 @@ class ThumbnailScraperApp(tk.Tk):
             self.esv_scan_files = []
             self.esv_scan_file_by_iid = {}
             self.esv_saver_tree.delete(*self.esv_saver_tree.get_children())
+            self._update_esv_conversion_buttons()
             messagebox.showerror(APP_NAME, f"Could not scan {folder}:\n{exc}")
             self.esv_scan_status_var.set("Could not read the SAVER folder.")
             return
@@ -3095,6 +3100,7 @@ class ThumbnailScraperApp(tk.Tk):
             f"Found {sum(path.suffix.casefold() == '.esv' for path in files)} ESV and "
             f"{sum(path.suffix.casefold() == '.sav' for path in files)} SAV files."
         )
+        self._update_esv_conversion_buttons()
 
     def _selected_esv_saver_files(self, suffix: str) -> list[Path]:
         return [
@@ -3104,17 +3110,41 @@ class ThumbnailScraperApp(tk.Tk):
             and self.esv_scan_file_by_iid[item_id].suffix.casefold() == suffix
         ]
 
+    def _update_esv_conversion_buttons(self, _event=None):
+        if self.esv_conversion_running:
+            extract_state = build_state = "disabled"
+        else:
+            selected = [
+                self.esv_scan_file_by_iid[item_id]
+                for item_id in self.esv_saver_tree.selection()
+                if item_id in self.esv_scan_file_by_iid
+            ]
+            has_sav = any(path.suffix.casefold() == ".sav" for path in selected)
+            has_esv = any(path.suffix.casefold() == ".esv" for path in selected)
+            extract_state = "normal" if has_esv and not has_sav else "disabled"
+            build_state = "normal" if has_sav else "disabled"
+        self.esv_extract_button.configure(state=extract_state)
+        self.esv_build_button.configure(state=build_state)
+
     def _begin_esv_conversion(self, heading: str):
         if self.esv_conversion_running:
             return False
         self.esv_conversion_running = True
         self.esv_scan_button.configure(state="disabled")
-        self.esv_extract_button.configure(state="disabled")
-        self.esv_build_button.configure(state="disabled")
+        self._update_esv_conversion_buttons()
         self.esv_conversion_progress_window = OperationProgressWindow(
             self, "ESV ↔ SAV Conversion", heading
         )
         return True
+
+    def _confirm_esv_conversion(self) -> bool:
+        return messagebox.askyesno(
+            APP_NAME,
+            "Converting saves could result in loss of save data, especially when overwriting "
+            "or merging files. Back up your .sav and .esv files before continuing. "
+            "Do you want to proceed?",
+            parent=self,
+        )
 
     def _finish_esv_conversion(
         self,
@@ -3125,8 +3155,7 @@ class ThumbnailScraperApp(tk.Tk):
         self.close_operation_progress("esv_conversion_progress_window")
         self.esv_conversion_running = False
         self.esv_scan_button.configure(state="normal")
-        self.esv_extract_button.configure(state="normal")
-        self.esv_build_button.configure(state="normal")
+        self._update_esv_conversion_buttons()
         self.scan_esv_saver_folder()
         self.esv_scan_status_var.set(status)
         if error is not None:
@@ -3147,11 +3176,13 @@ class ThumbnailScraperApp(tk.Tk):
             )
             return
 
+        if not self._confirm_esv_conversion():
+            return
+
         if not self._begin_esv_conversion(
             f"Preparing to extract {len(esv_files):,} selected ESV archive(s)…"
         ):
             return
-        output_root = Path(self.esv_saver_folder_var.get().strip()) / "Converted SAV"
 
         def worker():
             converted = 0
@@ -3172,12 +3203,11 @@ class ThumbnailScraperApp(tk.Tk):
                         for save in saves:
                             name = save_filename(save.title)
                             counts[name.casefold()] = counts.get(name.casefold(), 0) + 1
-                        game_folder = output_root / archive_path.stem
                         for save in saves:
                             name = save_filename(save.title)
                             if counts[name.casefold()] > 1:
                                 name = f"{Path(name).stem}_{save.checksum:08X}.sav"
-                            destination = game_folder / name
+                            destination = archive_path.parent / name
                             if destination.exists():
                                 failures.append(
                                     f"{destination}: already exists; left unchanged"
@@ -3195,7 +3225,7 @@ class ThumbnailScraperApp(tk.Tk):
                         total,
                         f"Extracted {converted} SAV file(s)",
                     )
-                status = f"Extracted {converted} SAV file(s) to {output_root}."
+                status = f"Extracted {converted} SAV file(s) beside the selected ESV archive(s)."
                 if failures:
                     status += f" {len(failures)} item(s) were not converted."
                 self.after(
@@ -3251,7 +3281,7 @@ class ThumbnailScraperApp(tk.Tk):
             selected_destination = filedialog.asksaveasfilename(
                 parent=self,
                 title="Save Jagoomba Color ESV",
-                initialdir=str(saver_folder),
+                initialdir=str(sav_files[0].parent),
                 initialfile=f"{emulator_stem}.esv",
                 defaultextension=".esv",
                 filetypes=[("Jagoomba Color saves", "*.esv")],
@@ -3264,7 +3294,11 @@ class ThumbnailScraperApp(tk.Tk):
         if destination.exists() and not messagebox.askyesno(
             APP_NAME,
             f"Merge these saves into {destination.name}?\nExisting saves and savestates will be kept.",
+            parent=self,
         ):
+            return
+
+        if not self._confirm_esv_conversion():
             return
 
         if not self._begin_esv_conversion(

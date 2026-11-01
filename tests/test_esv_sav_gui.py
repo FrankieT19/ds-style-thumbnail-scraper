@@ -27,6 +27,14 @@ class FakeTree:
         return self._selection
 
 
+class FakeButton:
+    def __init__(self):
+        self.state = None
+
+    def configure(self, **kwargs):
+        self.state = kwargs["state"]
+
+
 class FakeValue:
     def __init__(self, value):
         self.value = value
@@ -50,6 +58,10 @@ class ESVSavGuiTests(unittest.TestCase):
         app.esv_saver_tree = FakeTree(selection)
         app.esv_scan_file_by_iid = files
         app.esv_conversion_running = False
+        app.confirmation_prompts = 0
+        app._confirm_esv_conversion = lambda: (
+            setattr(app, "confirmation_prompts", app.confirmation_prompts + 1) or True
+        )
         app._begin_esv_conversion = lambda _heading: True
         app.progress_events = []
         app.queue_operation_progress = (
@@ -63,6 +75,38 @@ class ESVSavGuiTests(unittest.TestCase):
             )
         )
         return app
+
+    def test_conversion_confirmation_warns_about_save_data_loss(self):
+        app = object.__new__(APP_MODULE.ThumbnailScraperApp)
+        with patch.object(APP_MODULE.messagebox, "askyesno", return_value=True) as prompt:
+            self.assertTrue(APP_MODULE.ThumbnailScraperApp._confirm_esv_conversion(app))
+
+        self.assertIn("loss", prompt.call_args.args[1].casefold())
+        self.assertIn("back up", prompt.call_args.args[1].casefold())
+
+    def test_conversion_buttons_follow_selected_file_types(self):
+        app = object.__new__(APP_MODULE.ThumbnailScraperApp)
+        esv_file = Path("game.esv")
+        sav_file = Path("game.sav")
+        app.esv_scan_file_by_iid = {"esv": esv_file, "sav": sav_file}
+        app.esv_saver_tree = FakeTree(["esv"])
+        app.esv_conversion_running = False
+        app.esv_extract_button = FakeButton()
+        app.esv_build_button = FakeButton()
+
+        APP_MODULE.ThumbnailScraperApp._update_esv_conversion_buttons(app)
+        self.assertEqual(app.esv_extract_button.state, "normal")
+        self.assertEqual(app.esv_build_button.state, "disabled")
+
+        app.esv_saver_tree = FakeTree(["sav"])
+        APP_MODULE.ThumbnailScraperApp._update_esv_conversion_buttons(app)
+        self.assertEqual(app.esv_extract_button.state, "disabled")
+        self.assertEqual(app.esv_build_button.state, "normal")
+
+        app.esv_saver_tree = FakeTree([])
+        APP_MODULE.ThumbnailScraperApp._update_esv_conversion_buttons(app)
+        self.assertEqual(app.esv_extract_button.state, "disabled")
+        self.assertEqual(app.esv_build_button.state, "disabled")
 
     def test_extract_converts_only_selected_esv_archives_in_background_worker(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -85,13 +129,12 @@ class ESVSavGuiTests(unittest.TestCase):
             with patch.object(APP_MODULE.threading, "Thread", ImmediateThread):
                 APP_MODULE.ThumbnailScraperApp.convert_esv_files_to_sav(app)
 
-            selected_output = saver_folder / "Converted SAV" / "selected" / "SELECTED GAME.sav"
-            unselected_output = (
-                saver_folder / "Converted SAV" / "unselected" / "OTHER GAME.sav"
-            )
+            selected_output = saver_folder / "SELECTED GAME.sav"
+            unselected_output = saver_folder / "OTHER GAME.sav"
             self.assertEqual(selected_output.read_bytes(), b"a" * 8192)
             self.assertFalse(unselected_output.exists())
             self.assertEqual(len(app.finished_conversions), 1)
+            self.assertEqual(app.confirmation_prompts, 1)
             self.assertTrue(
                 any("Extracting archive" in event[0][1] for event in app.progress_events)
             )
@@ -109,7 +152,7 @@ class ESVSavGuiTests(unittest.TestCase):
                 rom = bytearray(0x8000)
                 rom[0x134:0x143] = title.encode("ascii").ljust(15, b"\0")
                 (root / f"{title}.gb").write_bytes(rom)
-            destination = root / "created.esv"
+            destination = saver_folder / "created.esv"
             app = self._app(
                 saver_folder,
                 ["selected"],
@@ -130,6 +173,7 @@ class ESVSavGuiTests(unittest.TestCase):
             self.assertEqual([save.title for save in converted], ["SELECTED GAME"])
             self.assertEqual(converted[0].data, b"a" * 8192)
             self.assertEqual(len(app.finished_conversions), 1)
+            self.assertEqual(app.confirmation_prompts, 1)
             self.assertTrue(
                 any("Indexing GB/GBC ROMs" in event[0][1] for event in app.progress_events)
             )

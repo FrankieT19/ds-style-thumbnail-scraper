@@ -50,7 +50,7 @@ For an extension-wide default image, choose **Enter Name...**, enter the extensi
 
 Complete full-pack building remains focused on Game Boy Advance; the Custom Art scan builds images only for games that are actually on the SD card.
 
-Use **ESV <-> SAV** to scan `SYSTEM/SAVER` on an SD card. Extracted saves are written to `Converted SAV` without replacing existing files. To create or update an ESV archive, keep the matching GB/GBC ROMs on the SD card; the converter uses their cartridge titles and checksums to associate each save.
+Use **ESV <-> SAV** to scan `SYSTEM/SAVER` on an SD card. Extracted `.sav` files are placed beside their source `.esv` without replacing existing files. To create or update an ESV archive, keep the matching GB/GBC ROMs on the SD card; the converter uses their cartridge titles and checksums to associate each save. The converter asks you to confirm before conversion because saving or merging can risk save data; keep backups.
 
 ## Download and History
 

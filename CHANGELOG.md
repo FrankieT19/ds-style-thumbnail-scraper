@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.10.13 - Safer ESV/SAV conversion
+
+This build includes the v1.10.12 fixes and follow-up improvements.
+
+### New features since v1.10.12
+
+- Conversion buttons now activate for the selected file type: ESV → SAV for ESV selections and SAV → ESV for SAV selections.
+- Converted files are placed beside their selected source files instead of in a separate output folder.
+
+### New fixes since v1.10.12
+
+- Added a confirmation warning before conversion explaining that save data could be lost and recommending backups.
+
+### Features added through v1.10.12
+
+- **v1.10.13:** Enabled the matching conversion button based on the selected file type and placed converted files beside their source.
+- **v1.10.12:** Added multi-file selection for conversion and the option to merge SAV files into one selected ESV archive.
+- **v1.10.11:** Added the ESV <-> SAV tab to extract Game Boy/Game Boy Color saves from Jagoomba archives and create or update archives from `.sav` files.
+- **v1.10.10:** Expanded artwork search and SD-card scanning beyond GBA, with system-aware Libretro, TheGamesDB, ScreenScraper, and IGDB lookup and automatic fallback.
+- **v1.10.10:** Added Custom Pack builds for all systems or a selected system, with mirrored ROM-folder output under `IMGS`/`IMGS2`, flat `CUSTOM` output, and extension defaults.
+- **v1.10.10:** Added selective transparency markers for compatible DS Style kernels, recursive console-aware local artwork matching, and an option to prioritize read-only local packs.
+- **v1.10.10:** Added incremental artwork caching, retry/skip options, optional CRC32/MD5/SHA-1 matching, improved online filename cleanup, provider totals, and live progress for scans and artwork builds.
+
+### Fixes through v1.10.12
+
+- **v1.10.13:** Warned users about possible save-data loss before conversion.
+- **v1.10.12:** Moved conversion and ROM indexing off the GUI thread with progress reporting; converted only selected files.
+- **v1.10.11:** Extracted current unflushed SRAM when an archive marks a save active; preserved existing extracted saves, rejected unsupported save sizes, reported missing or ambiguous ROM matches, and preserved other saves and savestates when merging.
+- **v1.10.10:** Kept local artwork matching scoped to the correct console; improved incremental scans and recovery from failed or invalid artwork downloads; favored standard retail releases and exact ROM matches while preserving cover details and transparency.
+- **v1.10.10:** Hardened standalone GBA utilities for mixed-case `.GBA` filenames, invalid dimensions and limits, and unreadable ROMs; safely handled malformed settings, scan reports, and provider caches.
+
+These changes and fixes were completed with the assistance of AI.
+
 ## v1.10.12 - Responsive ESV/SAV conversion
 
 This build includes the v1.10.11 fixes and follow-up improvements.
