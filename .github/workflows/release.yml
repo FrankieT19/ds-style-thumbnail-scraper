@@ -24,7 +24,7 @@ jobs:
 
       - name: Package application
         shell: pwsh
-        run: Compress-Archive -Path 'dist\DS Style Thumbnail Scraper.exe' -DestinationPath 'DS.Style.Thumbnail.Scraper.zip' -Force
+        run: Compress-Archive -Path 'dist\DS Style Card Companion.exe' -DestinationPath 'DS.Style.Card.Companion.zip' -Force
 
       - name: Publish GitHub release
         env:
@@ -39,4 +39,4 @@ jobs:
           }
           $notesPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
           Set-Content -Path $notesPath -Value $section.Value.Trim() -Encoding utf8
-          gh release create $tag --repo $env:GITHUB_REPOSITORY --title "DS Style Thumbnail Scraper $tag" --notes-file $notesPath "DS.Style.Thumbnail.Scraper.zip"
+          gh release create $tag --repo $env:GITHUB_REPOSITORY --title "DS Style Card Companion $tag" --notes-file $notesPath "DS.Style.Card.Companion.zip"

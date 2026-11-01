@@ -1,6 +1,6 @@
-# DS Style Thumbnail Scraper
+# DS Style Card Companion
 
-DS Style Thumbnail Scraper is a Windows desktop application for creating artwork packs for the **DS Style** custom kernel on the EZ-FLASH OMEGA and OMEGA Definitive Edition.
+DS Style Card Companion is a Windows desktop application for creating artwork packs for the **DS Style** custom kernel on the EZ-FLASH OMEGA and OMEGA Definitive Edition.
 
 It builds complete Game Boy Advance thumbnail packs from Libretro or a local artwork pack, and creates exact-name artwork for other systems supported by DS Style and Simple. For kernels with mirrored-artwork support, it can reproduce the ROM directory tree under `IMGS` and `IMGS2`, avoiding the flat `CUSTOM` index limit for ROM-matched art.
 
@@ -8,7 +8,7 @@ It builds complete Game Boy Advance thumbnail packs from Libretro or a local art
 
 Visit the [DS Style homepage](https://frankiet19.github.io/omega-de-ds-style-kernel/project/) for an overview, kernel downloads, tools and example themes.
 
-The [DS Style Manager](https://frankiet19.github.io/omega-de-ds-style-kernel/manager/) provides guided browser installation, a few starting preferences, artwork creation and installed-style management. Full artwork-pack building remains in this desktop Scraper.
+The [DS Style Manager](https://frankiet19.github.io/omega-de-ds-style-kernel/manager/) provides guided browser installation, a few starting preferences, artwork creation and installed-style management. Full artwork-pack building remains in DS Style Card Companion.
 
 ## Features
 
@@ -44,7 +44,7 @@ The mirrored layout requires a DS Style kernel build that includes the matching 
 - **Mirror ROM folders (recommended):** artwork follows each ROM's path relative to the SD root selected during Scan SD Card. This output is not limited by the flat `CUSTOM` artwork index. For example, `Game Boy/T/Tetris (World).gb` becomes `IMGS/Game Boy/T/Tetris (World).bmp` and `IMGS2/Game Boy/T/Tetris (World).bmp`.
 - **Legacy CUSTOM:** artwork is flattened into `IMGS/CUSTOM` and `IMGS2/CUSTOM`. The kernel's legacy indexed lookup supports up to 256 ordinary custom images per size. Extension defaults such as `gb.bmp` and `nes.bmp` are loaded directly and do not consume an index entry.
 
-To preserve the exact mirror structure, scan the actual SD-card root and keep the ROM folder names unchanged. This keeps intermediate grouping directories as well as console and alphabet folders. Scanning a narrower folder omits parent directories above that selected root (except that selecting a console folder itself is automatically handled). The scraper mirrors the existing ROM tree; it does not move ROM files or invent alphabet folders that do not exist in the ROM layout. Artwork pack output is written under `DS Style Thumbnail Scraper Output/Thumbnail Packs/<timestamp>/`. Copy the generated `IMGS` contents to `SYSTEM/IMGS` and `IMGS2` contents to `SYSTEM/IMGS2`, preserving all subfolders.
+To preserve the exact mirror structure, scan the actual SD-card root and keep the ROM folder names unchanged. This keeps intermediate grouping directories as well as console and alphabet folders. Scanning a narrower folder omits parent directories above that selected root (except that selecting a console folder itself is automatically handled). The app mirrors the existing ROM tree; it does not move ROM files or invent alphabet folders that do not exist in the ROM layout. Artwork pack output is written under `DS Style Card Companion Output/Thumbnail Packs/<timestamp>/`. Copy the generated `IMGS` contents to `SYSTEM/IMGS` and `IMGS2` contents to `SYSTEM/IMGS2`, preserving all subfolders.
 
 For an extension-wide default image, choose **Enter Name...**, enter the extension without a dot (for example `gb`), select its image, and build in either layout. It is written to `IMGS/CUSTOM/gb.bmp` or `IMGS2/CUSTOM/gb.bmp` according to the selected thumbnail size.
 
@@ -54,7 +54,7 @@ Use **ESV <-> SAV** to scan `SYSTEM/SAVER` on an SD card; **Refresh Scan** reloa
 
 ## Download and History
 
-- [Download the latest DS Style Thumbnail Scraper release](https://github.com/FrankieT19/ds-style-thumbnail-scraper/releases/latest)
+- [Download the latest DS Style Card Companion release](https://github.com/voluptuary/dsscc/releases/latest)
 - [Changelog](CHANGELOG.md)
 
 ## Setup

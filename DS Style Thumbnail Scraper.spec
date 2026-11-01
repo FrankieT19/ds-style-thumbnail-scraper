@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='DS Style Thumbnail Scraper',
+    name='DS Style Card Companion',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

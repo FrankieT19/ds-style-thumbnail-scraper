@@ -52,9 +52,9 @@ from ezflash_gba_thumbs import (
 )
 
 
-APP_NAME = "DS Style Thumbnail Scraper"
-APP_VERSION = "1.10.11"
-OUTPUT_FOLDER_NAME = "DS Style Thumbnail Scraper Output"
+APP_NAME = "DS Style Card Companion"
+APP_VERSION = "2.0.0"
+OUTPUT_FOLDER_NAME = "DS Style Card Companion Output"
 THUMBNAIL_PACKS_FOLDER_NAME = "Thumbnail Packs"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
 CONFIG_NAME = "thumbnail_scraper_settings.json"
@@ -2473,7 +2473,7 @@ class ThumbnailScraperApp(tk.Tk):
         ttk.Label(title_box, text="Find, preview, and build DS Style artwork.", style="Sub.TLabel").pack(anchor="w", pady=(3, 0))
         version_box = ttk.Frame(header, style="TFrame")
         version_box.pack(side="right", anchor="n")
-        ttk.Label(version_box, text=f"DS Style Thumbnail Scraper v{APP_VERSION}", style="HeaderVersion.TLabel").pack(anchor="e")
+        ttk.Label(version_box, text=f"{APP_NAME} v{APP_VERSION}", style="HeaderVersion.TLabel").pack(anchor="e")
         ttk.Label(version_box, text="For DS Style v7.4", style="HeaderVersion.TLabel").pack(anchor="e", pady=(4, 0))
 
         notebook = ttk.Notebook(self)
@@ -4634,7 +4634,8 @@ class ThumbnailScraperApp(tk.Tk):
         output_roots = [Path(root) / "SYSTEM" / folder_name, Path(root) / folder_name]
         generated_roots = (
             self.base_dir / OUTPUT_FOLDER_NAME,
-            # Continue reusing complete artwork made before the folder rename.
+            # Continue reusing complete artwork made before the rebrand.
+            self.base_dir / "DS Style Thumbnail Scraper Output",
             self.base_dir / "DS Style Thumbnail Scraper output",
         )
         previous_runs = []
