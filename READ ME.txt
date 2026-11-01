@@ -1,4 +1,4 @@
-DS STYLE CARD COMPANION v2.0.2
+DS STYLE CARD COMPANION v2.0.3
 
 For DS Style v7.4 or newer.
 

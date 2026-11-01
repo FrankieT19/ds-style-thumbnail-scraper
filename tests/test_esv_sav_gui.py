@@ -250,6 +250,45 @@ class ESVSavGuiTests(unittest.TestCase):
                 any("Indexing GB/GBC ROMs" in event[0][1] for event in app.progress_events)
             )
 
+    def test_sav_conversion_strips_flashgbx_crystal_rtc_trailer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            saver_folder = root / "SYSTEM" / "SAVER"
+            saver_folder.mkdir(parents=True)
+            selected = saver_folder / "PM_CRYSTAL.sav"
+            sram = b"\x5A" * 0x8000
+            rtc_registers = bytes(range(20))
+            selected.write_bytes(sram + rtc_registers + rtc_registers + b"\0" * 8)
+
+            rom = bytearray(0x8000)
+            rom[0x134:0x143] = b"PM_CRYSTAL".ljust(15, b"\0")
+            rom[0x147] = 0x10
+            rom[0x149] = 0x03
+            (root / "PM_CRYSTAL.gbc").write_bytes(rom)
+
+            destination = saver_folder / "PM_CRYSTAL.esv"
+            app = self._app(
+                saver_folder,
+                ["crystal"],
+                {"crystal": selected},
+            )
+            with (
+                patch.object(APP_MODULE.threading, "Thread", ImmediateThread),
+                patch.object(
+                    APP_MODULE.filedialog,
+                    "asksaveasfilename",
+                    return_value=str(destination),
+                ),
+            ):
+                APP_MODULE.ThumbnailScraperApp.convert_sav_files_to_esv(app)
+
+            converted = extract_goomba_saves(destination.read_bytes())
+
+            self.assertEqual(len(converted), 1)
+            self.assertEqual(converted[0].title, "PM_CRYSTAL")
+            self.assertEqual(converted[0].data, sram)
+            self.assertIn("FlashGBX RTC metadata was excluded", app.finished_conversions[0][0])
+
 
 if __name__ == "__main__":
     unittest.main()

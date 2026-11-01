@@ -17,6 +17,9 @@ ARCHIVE_SIZE = 0x10000
 ARCHIVE_DATA_LIMIT = 0xE000
 MAX_SAVE_SIZE = 0x8000
 ROM_EXTENSIONS = {".gb", ".gbc"}
+MBC3_RTC_MAPPER_TYPES = {0x0F, 0x10}
+FLASHGBX_MBC3_RTC_SIZE = 0x30
+GB_RAM_SIZES = {1: 0x800, 2: 0x2000, 3: 0x8000, 4: 0x20000, 5: 0x10000}
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,14 @@ class GoombaSave:
     title: str
     data: bytes
     checksum: int
+
+
+@dataclass(frozen=True)
+class GBRomInfo:
+    title: str
+    checksum: int
+    mapper_type: int
+    ram_size: int | None
 
 
 def _read_byte(data: bytes, offset: int) -> tuple[int, int]:
@@ -465,9 +476,9 @@ def _normalized_title(title: str) -> str:
 def scan_gb_rom_index(
     root: Path,
     progress_callback: Callable[[int, int, Path], None] | None = None,
-) -> dict[str, dict[int, str]]:
+) -> dict[str, dict[int, GBRomInfo]]:
     """Index GB/GBC ROM checksums by normalized cartridge title."""
-    index: dict[str, dict[int, str]] = {}
+    index: dict[str, dict[int, GBRomInfo]] = {}
     try:
         rom_paths = sorted(
             (path for path in root.rglob("*") if path.is_file() and path.suffix.casefold() in ROM_EXTENSIONS),
@@ -483,23 +494,28 @@ def scan_gb_rom_index(
             rom = rom_path.read_bytes()
             title = rom_title(rom)
             checksum = rom_checksum(rom)
+            mapper_type = rom[0x147]
+            ram_size = GB_RAM_SIZES.get(rom[0x149])
         except (OSError, ValueError):
             if progress_callback is not None:
                 progress_callback(current, len(rom_paths), rom_path)
             continue
+        rom_info = GBRomInfo(title, checksum, mapper_type, ram_size)
         key = _normalized_title(title)
         if key:
-            index.setdefault(key, {})[checksum] = title
+            index.setdefault(key, {})[checksum] = rom_info
         filename_key = _normalized_title(rom_path.stem)
         if filename_key:
-            index.setdefault(filename_key, {})[checksum] = title
+            index.setdefault(filename_key, {})[checksum] = rom_info
         if progress_callback is not None:
             progress_callback(current, len(rom_paths), rom_path)
     return index
 
 
-def match_save_to_rom(save_path: Path, rom_index: dict[str, dict[int, str]]) -> tuple[str, int]:
-    """Find the unique GB/GBC ROM checksum matching a .sav filename."""
+def match_save_to_rom_info(
+    save_path: Path, rom_index: dict[str, dict[int, GBRomInfo]]
+) -> GBRomInfo:
+    """Find ROM header details for the unique ROM matching a .sav filename."""
     save_title = _normalized_title(save_path.stem)
     matches = rom_index.get(save_title)
     if matches is None:
@@ -508,8 +524,31 @@ def match_save_to_rom(save_path: Path, rom_index: dict[str, dict[int, str]]) -> 
         raise ValueError(f"No matching GB/GBC ROM was found for {save_path.name}.")
     if len(matches) > 1:
         raise ValueError(f"More than one ROM with a different checksum matches {save_path.name}.")
-    checksum, title = next(iter(matches.items()))
-    return title, checksum
+    return next(iter(matches.values()))
+
+
+def match_save_to_rom(
+    save_path: Path, rom_index: dict[str, dict[int, GBRomInfo]]
+) -> tuple[str, int]:
+    """Find the unique GB/GBC ROM checksum matching a .sav filename."""
+    rom_info = match_save_to_rom_info(save_path, rom_index)
+    return rom_info.title, rom_info.checksum
+
+
+def strip_flashgbx_mbc3_rtc(data: bytes, rom_info: GBRomInfo) -> tuple[bytes, bool]:
+    """Remove FlashGBX's 48-byte MBC3 RTC trailer, leaving ordinary SRAM data."""
+    ram_size = rom_info.ram_size
+    if (
+        rom_info.mapper_type in MBC3_RTC_MAPPER_TYPES
+        and ram_size is not None
+        and 0 < ram_size <= MAX_SAVE_SIZE
+        and len(data) == ram_size + FLASHGBX_MBC3_RTC_SIZE
+    ):
+        rtc_start = ram_size
+        rtc_registers = data[rtc_start:rtc_start + 20]
+        if rtc_registers == data[rtc_start + 20:rtc_start + 40]:
+            return data[:ram_size], True
+    return data, False
 
 
 def find_matching_rom(save_path: Path, root: Path) -> tuple[str, int]:

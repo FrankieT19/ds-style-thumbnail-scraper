@@ -34,9 +34,10 @@ from goomba_save_converter import (
     build_goomba_archive,
     extract_goomba_saves,
     merge_goomba_archive,
-    match_save_to_rom,
+    match_save_to_rom_info,
     scan_gb_rom_index,
     save_filename,
+    strip_flashgbx_mbc3_rtc,
 )
 
 from ezflash_gba_thumbs import (
@@ -53,7 +54,7 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Card Companion"
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.0.3"
 OUTPUT_FOLDER_NAME = "DS Style Card Companion Output"
 THUMBNAIL_PACKS_FOLDER_NAME = "Thumbnail Packs"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
@@ -3347,6 +3348,7 @@ class ThumbnailScraperApp(tk.Tk):
                 rom_index = scan_gb_rom_index(rom_root, report_rom_progress)
                 saves = []
                 seen_checksums: set[int] = set()
+                rtc_metadata_omitted = False
                 for index, save_path in enumerate(sav_files, start=1):
                     self.queue_operation_progress(
                         "esv_conversion_progress_window",
@@ -3356,15 +3358,23 @@ class ThumbnailScraperApp(tk.Tk):
                         save_path.name,
                     )
                     try:
-                        title, checksum = match_save_to_rom(save_path, rom_index)
-                        if checksum in seen_checksums:
+                        rom_info = match_save_to_rom_info(save_path, rom_index)
+                        if rom_info.checksum in seen_checksums:
                             failures.append(
-                                f"{save_path.name}: another .sav for {title} is already included"
+                                f"{save_path.name}: another .sav for {rom_info.title} is already included"
                             )
                         else:
-                            seen_checksums.add(checksum)
+                            seen_checksums.add(rom_info.checksum)
+                            save_data, omitted_rtc = strip_flashgbx_mbc3_rtc(
+                                save_path.read_bytes(), rom_info
+                            )
+                            rtc_metadata_omitted |= omitted_rtc
                             saves.append(
-                                GoombaSave(title, save_path.read_bytes(), checksum)
+                                GoombaSave(
+                                    rom_info.title,
+                                    save_data,
+                                    rom_info.checksum,
+                                )
                             )
                     except (OSError, ValueError) as exc:
                         failures.append(f"{save_path.name}: {exc}")
@@ -3396,6 +3406,10 @@ class ThumbnailScraperApp(tk.Tk):
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(archive)
                 status = f"Added {len(saves)} selected save(s) to {destination.name}."
+                if rtc_metadata_omitted:
+                    status += (
+                        " FlashGBX RTC metadata was excluded because ESV archives store SRAM only."
+                    )
                 if failures:
                     status += f" {len(failures)} SAV file(s) were skipped."
                 self.queue_operation_progress(

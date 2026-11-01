@@ -1,5 +1,41 @@
 # Changelog
 
+## v2.0.3 - FlashGBX RTC save compatibility
+
+This build includes the v2.0.2 fixes and follow-up improvements.
+
+### New features since v2.0.2
+
+- Added SAV → ESV support for FlashGBX MBC3 RTC saves by extracting the SRAM payload from the RTC trailer. RTC register data is not stored in ESV archives and is reported as omitted.
+
+### New fixes since v2.0.2
+
+- None.
+
+### Features added through v2.0.2
+
+- **v2.0.3:** Added conversion support for FlashGBX MBC3 RTC save files, retaining SRAM and reporting that RTC metadata cannot be stored in ESV.
+- **v2.0.2:** Moved the Settings tab to the rightmost position and updated the header subtitle for DS Style Merkin Mix.
+- **v2.0.0:** Rebranded the application as DS Style Card Companion and renamed the packaged Windows application.
+- **v1.10.14:** Added a clear refresh control for the SAVER listing, matched converter button colors, and named extracted saves after their source archive.
+- **v1.10.13:** Enabled the matching conversion button based on the selected file type and placed converted files beside their source.
+- **v1.10.12:** Added multi-file selection for conversion and the option to merge SAV files into one selected ESV archive.
+- **v1.10.11:** Added the ESV <-> SAV tab to extract Game Boy/Game Boy Color saves from Jagoomba archives and create or update archives from `.sav` files.
+- **v1.10.10:** Expanded artwork search and SD-card scanning beyond GBA, with system-aware provider lookup and fallback, plus Custom Pack builds and mirrored output.
+- **v1.10.10:** Added selective transparency, recursive console-aware local-art matching, caching and retry controls, optional ROM hash matching, live progress, and artwork-selection improvements.
+
+### Fixes through v2.0.2
+
+- **v2.0.2:** Preserved access to existing branded output folders for SD scan reports and cached artwork; used a single selected SAV filename as the default ESV name.
+- **v2.0.1:** SAV files named after long No-Intro ROM filenames now match GB/GBC ROMs using their cartridge header title and ROM checksum.
+- **v2.0.0:** Warned users about possible save-data loss before conversion.
+- **v1.10.12:** Moved conversion and ROM indexing off the GUI thread with progress reporting; converted only selected files.
+- **v1.10.11:** Extracted current unflushed SRAM when an archive marks a save active; preserved existing extracted saves, rejected unsupported save sizes, reported missing or ambiguous ROM matches, and preserved other saves and savestates when merging.
+- **v1.10.10:** Kept local artwork matching scoped to the correct console; improved incremental scans and recovery from failed or invalid artwork downloads; favored standard retail releases and exact ROM matches while preserving cover details and transparency.
+- **v1.10.10:** Hardened standalone GBA utilities for mixed-case `.GBA` filenames, invalid dimensions and limits, and unreadable ROMs; safely handled malformed settings, scan reports, and provider caches.
+
+These changes and fixes were completed with the assistance of AI.
+
 ## v2.0.2 - Branding compatibility and interface updates
 
 This build includes the v2.0.1 fixes and follow-up improvements.
