@@ -116,6 +116,27 @@ class GoombaSaveConverterTests(unittest.TestCase):
             self.assertEqual(title, "TETRIS DX")
             self.assertEqual(checksum, rom_checksum(bytes(rom)))
 
+    def test_sav_matching_uses_no_intro_rom_filename_when_header_title_is_shorter(self):
+        rom_filename = (
+            "Pokemon - Yellow Version - Special Pikachu Edition "
+            "(USA, Europe) (GBC, SGB Enhanced).gbc"
+        )
+        save_filename = f"{Path(rom_filename).stem}.sav"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            rom = bytearray(0x8000)
+            rom[0x134:0x143] = b"POKEMON YELLOW".ljust(15, b"\0")
+            rom[0x143] = 0x80
+            rom_path = root / rom_filename
+            rom_path.write_bytes(rom)
+            save_path = root / save_filename
+            save_path.write_bytes(b"\0" * 8192)
+
+            title, checksum = find_matching_rom(save_path, root)
+
+            self.assertEqual(title, "POKEMON YELLOW")
+            self.assertEqual(checksum, rom_checksum(bytes(rom)))
+
     def test_sav_matching_rejects_ambiguous_rom_titles(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

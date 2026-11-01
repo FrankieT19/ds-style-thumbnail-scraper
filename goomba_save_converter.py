@@ -490,6 +490,9 @@ def scan_gb_rom_index(
         key = _normalized_title(title)
         if key:
             index.setdefault(key, {})[checksum] = title
+        filename_key = _normalized_title(rom_path.stem)
+        if filename_key:
+            index.setdefault(filename_key, {})[checksum] = title
         if progress_callback is not None:
             progress_callback(current, len(rom_paths), rom_path)
     return index
