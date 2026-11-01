@@ -6,15 +6,15 @@ This build includes the v2.0.2 fixes and follow-up improvements.
 
 ### New features since v2.0.2
 
-- Added SAV → ESV support for FlashGBX MBC3 RTC saves by extracting the SRAM payload from the RTC trailer. RTC register data is not stored in ESV archives and is reported as omitted.
+- Added SAV → ESV support for FlashGBX MBC3 RTC saves by extracting the SRAM payload from the RTC trailer; ESV does not preserve RTC register data.
 
 ### New fixes since v2.0.2
 
-- None.
+- Added a clear conversion warning that RTC data is not preserved between SAV and ESV files.
 
 ### Features added through v2.0.2
 
-- **v2.0.3:** Added conversion support for FlashGBX MBC3 RTC save files, retaining SRAM and reporting that RTC metadata cannot be stored in ESV.
+- **v2.0.3:** Added conversion support for FlashGBX MBC3 RTC save files, retaining SRAM while warning that RTC metadata cannot be stored in ESV.
 - **v2.0.2:** Moved the Settings tab to the rightmost position and updated the header subtitle for DS Style Merkin Mix.
 - **v2.0.0:** Rebranded the application as DS Style Card Companion and renamed the packaged Windows application.
 - **v1.10.14:** Added a clear refresh control for the SAVER listing, matched converter button colors, and named extracted saves after their source archive.

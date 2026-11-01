@@ -100,7 +100,11 @@ class ESVSavGuiTests(unittest.TestCase):
         with patch.object(APP_MODULE.messagebox, "askyesno", return_value=True) as prompt:
             self.assertTrue(APP_MODULE.ThumbnailScraperApp._confirm_esv_conversion(app))
 
-        self.assertIn("loss", prompt.call_args.args[1].casefold())
+        self.assertIn("lose data", prompt.call_args.args[1].casefold())
+        self.assertIn(
+            "rtc data is not preserved between sav and esv files",
+            prompt.call_args.args[1].casefold(),
+        )
         self.assertIn("back up", prompt.call_args.args[1].casefold())
 
     def test_conversion_buttons_follow_selected_file_types(self):

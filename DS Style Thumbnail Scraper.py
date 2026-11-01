@@ -3154,9 +3154,9 @@ class ThumbnailScraperApp(tk.Tk):
     def _confirm_esv_conversion(self) -> bool:
         return messagebox.askyesno(
             APP_NAME,
-            "Converting saves could result in loss of save data, especially when overwriting "
-            "or merging files. Back up your .sav and .esv files before continuing. "
-            "Do you want to proceed?",
+            "Save conversion can lose data, especially when overwriting or merging. "
+            "RTC data is not preserved between SAV and ESV files. Back up your .sav and .esv files "
+            "before continuing. Proceed?",
             parent=self,
         )
 
