@@ -70,9 +70,13 @@ class RegionControlResponsivenessTests(unittest.TestCase):
         app.build_preview_search.assert_not_called()
 
     def test_game_region_checkbox_defers_settings_save(self):
-        app = SimpleNamespace(_schedule_settings_save=Mock())
+        app = SimpleNamespace(
+            _schedule_settings_save=Mock(),
+            ensure_build_preview_after_interaction=Mock(),
+        )
         APP_MODULE.ThumbnailScraperApp.on_rom_region_change(app)
         app._schedule_settings_save.assert_called_once_with()
+        app.ensure_build_preview_after_interaction.assert_called_once_with()
 
     def test_repeated_build_preview_requests_coalesce_to_latest_timer(self):
         app = SimpleNamespace(

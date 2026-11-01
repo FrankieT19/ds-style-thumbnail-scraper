@@ -376,6 +376,36 @@ class SdScanInvalidImageTests(unittest.TestCase):
             self.assertEqual(result["skipped_existing"], 1)
             self.assertEqual(result["additions"], [])
 
+    def test_previous_branding_output_folder_is_recognized(self):
+        calls = []
+
+        def fake_http_get(url):
+            calls.append(url)
+            return png_bytes()
+
+        self.with_mock_downloads(fake_http_get)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "sd"
+            make_rom(root, "Legacy Output Game")
+            app_dir = Path(temp) / "app"
+            old_output = (
+                app_dir
+                / "DS Style Thumbnail Scraper Output"
+                / "2026-10-10_12-00-00"
+                / "IMGS"
+            )
+            existing = old_output / "Game Boy" / "L" / "Legacy Output Game.bmp"
+            existing.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (120, 80), (60, 100, 120)).save(existing, format="BMP")
+
+            app, prompts = make_app(app_dir)
+            result = app._scan_sd_worker(root, "Box Art", ["120x80"], False)
+
+            self.assertEqual(calls, [])
+            self.assertEqual(prompts, [])
+            self.assertEqual(result["skipped_existing"], 1)
+            self.assertEqual(result["additions"], [])
+
     def test_corrupt_existing_sd_thumbnail_is_not_mistaken_for_complete_output(self):
         calls = []
 

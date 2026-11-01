@@ -53,7 +53,7 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Card Companion"
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 OUTPUT_FOLDER_NAME = "DS Style Card Companion Output"
 THUMBNAIL_PACKS_FOLDER_NAME = "Thumbnail Packs"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
@@ -876,6 +876,18 @@ def validate_custom_art_name(value: str) -> str:
 
 def output_path_for_custom_name(output_root: Path, name: str) -> Path:
     return output_root / "CUSTOM" / f"{validate_custom_art_name(name)}.bmp"
+
+
+def sd_scan_report_directory(base_dir: Path) -> Path:
+    legacy_output_names = (
+        "DS Style Thumbnail Scraper Output",
+        "DS Style Thumbnail Scraper output",
+    )
+    for name in legacy_output_names:
+        legacy_root = base_dir / name
+        if legacy_root.is_dir():
+            return legacy_root / "SD Scan Reports"
+    return base_dir / OUTPUT_FOLDER_NAME / "SD Scan Reports"
 
 
 def display_libretro_name(name: str) -> str:
@@ -2474,7 +2486,7 @@ class ThumbnailScraperApp(tk.Tk):
         version_box = ttk.Frame(header, style="TFrame")
         version_box.pack(side="right", anchor="n")
         ttk.Label(version_box, text=f"{APP_NAME} v{APP_VERSION}", style="HeaderVersion.TLabel").pack(anchor="e")
-        ttk.Label(version_box, text="For DS Style v7.4", style="HeaderVersion.TLabel").pack(anchor="e", pady=(4, 0))
+        ttk.Label(version_box, text="for DS Style Merkin Mix", style="HeaderVersion.TLabel").pack(anchor="e", pady=(4, 0))
 
         notebook = ttk.Notebook(self)
         self.notebook = notebook
@@ -2489,8 +2501,8 @@ class ThumbnailScraperApp(tk.Tk):
         notebook.add(self.preview_tab, text="Search")
         notebook.add(self.custom_tab, text="Custom Pack")
         notebook.add(self.exceptions_tab, text="GBA Exceptions")
-        notebook.add(self.settings_tab, text="Settings")
         notebook.add(self.esv_sav_tab, text="ESV <-> SAV")
+        notebook.add(self.settings_tab, text="Settings")
         notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
         self._build_build_tab()
         self._build_preview_tab()
@@ -3286,11 +3298,16 @@ class ThumbnailScraperApp(tk.Tk):
         if selected_esv:
             destination = selected_esv[0]
         else:
+            default_esv_name = (
+                f"{sav_files[0].stem}.esv"
+                if len(sav_files) == 1
+                else f"{emulator_stem}.esv"
+            )
             selected_destination = filedialog.asksaveasfilename(
                 parent=self,
                 title="Save Jagoomba Color ESV",
                 initialdir=str(sav_files[0].parent),
-                initialfile=f"{emulator_stem}.esv",
+                initialfile=default_esv_name,
                 defaultextension=".esv",
                 filetypes=[("Jagoomba Color saves", "*.esv")],
             )
@@ -5495,7 +5512,7 @@ class ThumbnailScraperApp(tk.Tk):
                 # Provider errors can sometimes echo request URLs; redact common
                 # credential query fields before writing user-visible reports.
                 report_lines.append(f"  Lookup details: {diagnostic}")
-        report_dir = self.base_dir / OUTPUT_FOLDER_NAME / "SD Scan Reports"
+        report_dir = sd_scan_report_directory(self.base_dir)
         report_dir.mkdir(parents=True, exist_ok=True)
         report_path = report_dir / f"sd_scan_{time.strftime('%Y-%m-%d_%H-%M-%S')}.txt"
         counter = 2

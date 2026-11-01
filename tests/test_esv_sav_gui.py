@@ -233,10 +233,14 @@ class ESVSavGuiTests(unittest.TestCase):
                     APP_MODULE.filedialog,
                     "asksaveasfilename",
                     return_value=str(destination),
-                ),
+                ) as save_dialog,
             ):
                 APP_MODULE.ThumbnailScraperApp.convert_sav_files_to_esv(app)
 
+            self.assertEqual(
+                save_dialog.call_args.kwargs["initialfile"],
+                "SELECTED GAME.esv",
+            )
             converted = extract_goomba_saves(destination.read_bytes())
             self.assertEqual([save.title for save in converted], ["SELECTED GAME"])
             self.assertEqual(converted[0].data, b"a" * 8192)

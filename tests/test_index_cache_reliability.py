@@ -100,6 +100,26 @@ class IndexCacheReliabilityTests(unittest.TestCase):
                 app.import_sd_scan_report()
             warning.assert_called_once()
 
+    def test_sd_scan_reports_continue_using_the_previous_output_folder(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base_dir = Path(temp)
+            legacy_output = base_dir / "DS Style Thumbnail Scraper Output"
+            legacy_output.mkdir()
+
+            self.assertEqual(
+                APP.sd_scan_report_directory(base_dir),
+                legacy_output / "SD Scan Reports",
+            )
+
+    def test_sd_scan_reports_use_current_output_folder_without_legacy_folder(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base_dir = Path(temp)
+
+            self.assertEqual(
+                APP.sd_scan_report_directory(base_dir),
+                base_dir / APP.OUTPUT_FOLDER_NAME / "SD Scan Reports",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

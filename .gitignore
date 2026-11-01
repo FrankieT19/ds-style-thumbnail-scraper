@@ -6,6 +6,8 @@ build/
 dist/
 DS Style Thumbnail Scraper Cache/
 DS Style Thumbnail Scraper output/
+DS Style Thumbnail Scraper Output/
+DS Style Card Companion Output/
 thumbnail_scraper_settings.json
 custom_roms.json
 exceptions.json
