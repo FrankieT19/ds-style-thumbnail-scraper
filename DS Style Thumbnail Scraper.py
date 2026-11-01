@@ -37,7 +37,7 @@ from goomba_save_converter import (
     match_save_to_rom_info,
     scan_gb_rom_index,
     save_filename,
-    strip_flashgbx_mbc3_rtc,
+    strip_mbc3_rtc_trailer,
 )
 
 from ezflash_gba_thumbs import (
@@ -3365,7 +3365,7 @@ class ThumbnailScraperApp(tk.Tk):
                             )
                         else:
                             seen_checksums.add(rom_info.checksum)
-                            save_data, omitted_rtc = strip_flashgbx_mbc3_rtc(
+                            save_data, omitted_rtc = strip_mbc3_rtc_trailer(
                                 save_path.read_bytes(), rom_info
                             )
                             rtc_metadata_omitted |= omitted_rtc
@@ -3408,7 +3408,7 @@ class ThumbnailScraperApp(tk.Tk):
                 status = f"Added {len(saves)} selected save(s) to {destination.name}."
                 if rtc_metadata_omitted:
                     status += (
-                        " FlashGBX RTC metadata was excluded because ESV archives store SRAM only."
+                        " RTC metadata was excluded because ESV archives store SRAM only."
                     )
                 if failures:
                     status += f" {len(failures)} SAV file(s) were skipped."

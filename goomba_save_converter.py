@@ -535,8 +535,8 @@ def match_save_to_rom(
     return rom_info.title, rom_info.checksum
 
 
-def strip_flashgbx_mbc3_rtc(data: bytes, rom_info: GBRomInfo) -> tuple[bytes, bool]:
-    """Remove FlashGBX's 48-byte MBC3 RTC trailer, leaving ordinary SRAM data."""
+def strip_mbc3_rtc_trailer(data: bytes, rom_info: GBRomInfo) -> tuple[bytes, bool]:
+    """Remove the 48-byte MBC3 RTC trailer, leaving ordinary SRAM data."""
     ram_size = rom_info.ram_size
     if (
         rom_info.mapper_type in MBC3_RTC_MAPPER_TYPES

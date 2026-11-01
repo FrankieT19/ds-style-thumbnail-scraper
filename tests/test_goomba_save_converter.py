@@ -16,7 +16,7 @@ from goomba_save_converter import (
     merge_goomba_archive,
     rom_checksum,
     scan_gb_rom_index,
-    strip_flashgbx_mbc3_rtc,
+    strip_mbc3_rtc_trailer,
 )
 
 
@@ -119,7 +119,7 @@ class GoombaSaveConverterTests(unittest.TestCase):
             self.assertEqual(title, "TETRIS DX")
             self.assertEqual(checksum, rom_checksum(bytes(rom)))
 
-    def test_strips_flashgbx_mbc3_rtc_trailer_from_matching_save(self):
+    def test_strips_mbc3_rtc_trailer_from_matching_save(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             rom = bytearray(0x8000)
@@ -133,7 +133,7 @@ class GoombaSaveConverterTests(unittest.TestCase):
             save_path.write_bytes(sram + rtc_registers + rtc_registers + b"\0" * 8)
 
             rom_info = match_save_to_rom_info(save_path, scan_gb_rom_index(root))
-            converted, omitted_rtc = strip_flashgbx_mbc3_rtc(
+            converted, omitted_rtc = strip_mbc3_rtc_trailer(
                 save_path.read_bytes(), rom_info
             )
 
@@ -144,7 +144,7 @@ class GoombaSaveConverterTests(unittest.TestCase):
         rom_info = GBRomInfo("TEST GAME", 0, 0x03, 0x8000)
         data = b"\x5A" * 0x8030
 
-        converted, omitted_rtc = strip_flashgbx_mbc3_rtc(data, rom_info)
+        converted, omitted_rtc = strip_mbc3_rtc_trailer(data, rom_info)
 
         self.assertEqual(converted, data)
         self.assertFalse(omitted_rtc)

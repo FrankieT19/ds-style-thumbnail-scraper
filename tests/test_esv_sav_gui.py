@@ -254,7 +254,7 @@ class ESVSavGuiTests(unittest.TestCase):
                 any("Indexing GB/GBC ROMs" in event[0][1] for event in app.progress_events)
             )
 
-    def test_sav_conversion_strips_flashgbx_crystal_rtc_trailer(self):
+    def test_sav_conversion_strips_crystal_rtc_trailer(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             saver_folder = root / "SYSTEM" / "SAVER"
@@ -291,7 +291,7 @@ class ESVSavGuiTests(unittest.TestCase):
             self.assertEqual(len(converted), 1)
             self.assertEqual(converted[0].title, "PM_CRYSTAL")
             self.assertEqual(converted[0].data, sram)
-            self.assertIn("FlashGBX RTC metadata was excluded", app.finished_conversions[0][0])
+            self.assertIn("RTC metadata was excluded", app.finished_conversions[0][0])
 
 
 if __name__ == "__main__":
