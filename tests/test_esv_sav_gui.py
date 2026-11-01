@@ -1,4 +1,5 @@
 import importlib.util
+import struct
 import sys
 import tempfile
 import unittest
@@ -13,10 +14,24 @@ sys.modules[SPEC.name] = APP_MODULE
 SPEC.loader.exec_module(APP_MODULE)
 
 from goomba_save_converter import (  # noqa: E402
+    CONFIG_GB_MODE_MASK,
+    GB_MODE_GBC_SGB,
     GoombaSave,
     build_goomba_archive,
     extract_goomba_saves,
 )
+
+
+def config_misc_byte(archive):
+    offset = 4
+    while offset + 4 <= len(archive):
+        record_size, record_type = struct.unpack_from("<HH", archive, offset)
+        if record_size == 0:
+            break
+        if record_type == 2:
+            return archive[offset + 6]
+        offset += record_size
+    raise AssertionError("Archive has no config record")
 
 
 class FakeTree:
@@ -248,6 +263,10 @@ class ESVSavGuiTests(unittest.TestCase):
             converted = extract_goomba_saves(destination.read_bytes())
             self.assertEqual([save.title for save in converted], ["SELECTED GAME"])
             self.assertEqual(converted[0].data, b"a" * 8192)
+            self.assertEqual(
+                config_misc_byte(destination.read_bytes()) & CONFIG_GB_MODE_MASK,
+                0,
+            )
             self.assertEqual(len(app.finished_conversions), 1)
             self.assertEqual(app.confirmation_prompts, 1)
             self.assertTrue(
@@ -266,6 +285,7 @@ class ESVSavGuiTests(unittest.TestCase):
 
             rom = bytearray(0x8000)
             rom[0x134:0x143] = b"PM_CRYSTAL".ljust(15, b"\0")
+            rom[0x143] = 0x80
             rom[0x147] = 0x10
             rom[0x149] = 0x03
             (root / "PM_CRYSTAL.gbc").write_bytes(rom)
@@ -291,6 +311,10 @@ class ESVSavGuiTests(unittest.TestCase):
             self.assertEqual(len(converted), 1)
             self.assertEqual(converted[0].title, "PM_CRYSTAL")
             self.assertEqual(converted[0].data, sram)
+            self.assertEqual(
+                config_misc_byte(destination.read_bytes()) & CONFIG_GB_MODE_MASK,
+                GB_MODE_GBC_SGB << 2,
+            )
             self.assertIn("RTC metadata was excluded", app.finished_conversions[0][0])
 
 

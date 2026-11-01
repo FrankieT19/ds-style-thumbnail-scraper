@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 
 from goomba_save_converter import (
+    CONFIG_GB_MODE_MASK,
+    GB_MODE_GBC_SGB,
     GBRomInfo,
     GoombaSave,
     build_goomba_archive,
@@ -18,6 +20,18 @@ from goomba_save_converter import (
     scan_gb_rom_index,
     strip_mbc3_rtc_trailer,
 )
+
+
+def config_misc_byte(archive):
+    offset = 4
+    while offset + 4 <= len(archive):
+        record_size, record_type = struct.unpack_from("<HH", archive, offset)
+        if record_size == 0:
+            break
+        if record_type == 2:
+            return archive[offset + 6]
+        offset += record_size
+    raise AssertionError("Archive has no config record")
 
 
 class GoombaSaveConverterTests(unittest.TestCase):
@@ -81,6 +95,26 @@ class GoombaSaveConverterTests(unittest.TestCase):
             {save.checksum: save for save in extract_goomba_saves(merged)},
             {1: updated, 2: existing_saves[1], 3: added},
         )
+
+    def test_build_sets_gameboy_mode_and_merge_preserves_other_config_bits(self):
+        save = GoombaSave("GAME", b"\x11" * 8192, 1)
+        archive = bytearray(build_goomba_archive([save], GB_MODE_GBC_SGB))
+        self.assertEqual(
+            config_misc_byte(archive) & CONFIG_GB_MODE_MASK,
+            GB_MODE_GBC_SGB << 2,
+        )
+
+        preserved = merge_goomba_archive(bytes(archive), [save])
+        self.assertEqual(
+            config_misc_byte(preserved) & CONFIG_GB_MODE_MASK,
+            GB_MODE_GBC_SGB << 2,
+        )
+
+        config_offset = 4 + struct.unpack_from("<H", archive, 4)[0]
+        archive[config_offset + 6] |= 0xA3
+        merged = merge_goomba_archive(bytes(archive), [save], gameboy_mode=0)
+
+        self.assertEqual(config_misc_byte(merged), 0xA3)
 
     def test_extract_uses_unflushed_sram_when_config_marks_it_active(self):
         save = GoombaSave("TETRIS DX", b"\x11" * 8192, 0x12345678)

@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.0.4 - GB/GBC emulator mode detection
+
+This build includes the v2.0.3 fixes and follow-up improvements.
+
+### New fixes since v2.0.3
+
+- SAV → ESV conversion now sets Jagoomba Color to GB or GBC+SGB based on the matched ROM header.
+
 ## v2.0.3 - RTC save compatibility
 
 This build includes the v2.0.2 fixes and follow-up improvements.

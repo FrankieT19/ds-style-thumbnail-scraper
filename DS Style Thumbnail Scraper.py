@@ -30,6 +30,8 @@ from thumbnail_rendering import fit_image_to_canvas, should_fit_art
 from rom_matching import compute_rom_hashes, strip_nointro_tags
 from json_cache import write_json_atomic
 from goomba_save_converter import (
+    GB_MODE_GB,
+    GB_MODE_GBC_SGB,
     GoombaSave,
     build_goomba_archive,
     extract_goomba_saves,
@@ -54,7 +56,7 @@ from ezflash_gba_thumbs import (
 
 
 APP_NAME = "DS Style Card Companion"
-APP_VERSION = "2.0.3"
+APP_VERSION = "2.0.4"
 OUTPUT_FOLDER_NAME = "DS Style Card Companion Output"
 THUMBNAIL_PACKS_FOLDER_NAME = "Thumbnail Packs"
 CACHE_FOLDER_NAME = "DS Style Thumbnail Scraper Cache"
@@ -3349,6 +3351,7 @@ class ThumbnailScraperApp(tk.Tk):
                 saves = []
                 seen_checksums: set[int] = set()
                 rtc_metadata_omitted = False
+                gameboy_mode = GB_MODE_GB
                 for index, save_path in enumerate(sav_files, start=1):
                     self.queue_operation_progress(
                         "esv_conversion_progress_window",
@@ -3376,6 +3379,9 @@ class ThumbnailScraperApp(tk.Tk):
                                     rom_info.checksum,
                                 )
                             )
+                            if rom_info.cgb_compatible:
+                                # Any GBC ROM selects the archive's single shared GBC+SGB mode.
+                                gameboy_mode = GB_MODE_GBC_SGB
                     except (OSError, ValueError) as exc:
                         failures.append(f"{save_path.name}: {exc}")
 
@@ -3399,9 +3405,11 @@ class ThumbnailScraperApp(tk.Tk):
                     destination.name,
                 )
                 archive = (
-                    merge_goomba_archive(destination.read_bytes(), saves)
+                    merge_goomba_archive(
+                        destination.read_bytes(), saves, gameboy_mode
+                    )
                     if destination.exists()
-                    else build_goomba_archive(saves)
+                    else build_goomba_archive(saves, gameboy_mode)
                 )
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(archive)

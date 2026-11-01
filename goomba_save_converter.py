@@ -20,6 +20,9 @@ ROM_EXTENSIONS = {".gb", ".gbc"}
 MBC3_RTC_MAPPER_TYPES = {0x0F, 0x10}
 FLASHGBX_MBC3_RTC_SIZE = 0x30
 GB_RAM_SIZES = {1: 0x800, 2: 0x2000, 3: 0x8000, 4: 0x20000, 5: 0x10000}
+GB_MODE_GB = 0
+GB_MODE_GBC_SGB = 3
+CONFIG_GB_MODE_MASK = 0x0C
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,7 @@ class GBRomInfo:
     checksum: int
     mapper_type: int
     ram_size: int | None
+    cgb_compatible: bool = False
 
 
 def _read_byte(data: bytes, offset: int) -> tuple[int, int]:
@@ -351,20 +355,28 @@ def extract_goomba_saves(data: bytes) -> list[GoombaSave]:
     return updated
 
 
-def build_goomba_archive(saves: list[GoombaSave]) -> bytes:
+def build_goomba_archive(
+    saves: list[GoombaSave], gameboy_mode: int = GB_MODE_GB
+) -> bytes:
     """Build a Goomba Color SRAM image with SRAM entries and a clean config record."""
     if not saves:
         raise ValueError("Select at least one .sav file to create an ESV archive.")
+    if not 0 <= gameboy_mode <= 3:
+        raise ValueError("The Game Boy mode must be between 0 and 3.")
 
     archive = bytearray(struct.pack("<I", 0x57A731D8))
     for save in saves:
         archive.extend(_encode_sram_record(save))
 
-    archive.extend(struct.pack("<HH", HEADER_SIZE, CONFIG_RECORD_TYPE))
-    archive.extend(b"\0" * 4)
-    archive.extend(struct.pack("<I", 0))
-    archive.extend(b"\0" * 4)
-    archive.extend(b"CFG".ljust(32, b"\0"))
+    config_record = bytearray(
+        struct.pack("<HH", HEADER_SIZE, CONFIG_RECORD_TYPE)
+        + b"\0" * 4
+        + struct.pack("<I", 0)
+        + b"\0" * 4
+        + b"CFG".ljust(32, b"\0")
+    )
+    config_record[6] = gameboy_mode << 2
+    archive.extend(config_record)
     archive.extend(b"\0\0\0\0\xff\xff\xff\xff")
     if len(archive) > ARCHIVE_DATA_LIMIT:
         raise ValueError(
@@ -392,10 +404,16 @@ def _encode_sram_record(save: GoombaSave) -> bytes:
     )
 
 
-def merge_goomba_archive(data: bytes, incoming_saves: list[GoombaSave]) -> bytes:
+def merge_goomba_archive(
+    data: bytes,
+    incoming_saves: list[GoombaSave],
+    gameboy_mode: int | None = None,
+) -> bytes:
     """Add or replace SRAM records while preserving savestates and other archive records."""
     if not incoming_saves:
         raise ValueError("Select at least one .sav file to add to the ESV archive.")
+    if gameboy_mode is not None and not 0 <= gameboy_mode <= 3:
+        raise ValueError("The Game Boy mode must be between 0 and 3.")
     state_id, records = _archive_records(data)
     old_saves = extract_goomba_saves(data) if any(
         struct.unpack_from("<HH", record)[1] == SRAM_RECORD_TYPE for record in records
@@ -420,9 +438,12 @@ def merge_goomba_archive(data: bytes, incoming_saves: list[GoombaSave]) -> bytes
                 used_checksums.add(checksum)
         elif record_type == CONFIG_RECORD_TYPE:
             config_found = True
+            record = bytearray(record)
+            if gameboy_mode is not None:
+                record[6] = (record[6] & ~CONFIG_GB_MODE_MASK) | (gameboy_mode << 2)
             if record_size >= 12:
                 record = record[:8] + b"\0\0\0\0" + record[12:]
-            merged_records.append(record)
+            merged_records.append(bytes(record))
         else:
             merged_records.append(record)
 
@@ -430,14 +451,15 @@ def merge_goomba_archive(data: bytes, incoming_saves: list[GoombaSave]) -> bytes
         if checksum not in used_checksums:
             merged_records.append(record)
     if not config_found:
-        config_record = (
+        config_record = bytearray(
             struct.pack("<HH", HEADER_SIZE, CONFIG_RECORD_TYPE)
             + b"\0" * 4
             + struct.pack("<I", 0)
             + b"\0" * 4
             + b"CFG".ljust(32, b"\0")
         )
-        merged_records.append(config_record)
+        config_record[6] = (gameboy_mode or GB_MODE_GB) << 2
+        merged_records.append(bytes(config_record))
 
     archive = bytearray(struct.pack("<I", state_id))
     for record in merged_records:
@@ -496,11 +518,12 @@ def scan_gb_rom_index(
             checksum = rom_checksum(rom)
             mapper_type = rom[0x147]
             ram_size = GB_RAM_SIZES.get(rom[0x149])
+            cgb_compatible = bool(rom[0x143] & 0x80)
         except (OSError, ValueError):
             if progress_callback is not None:
                 progress_callback(current, len(rom_paths), rom_path)
             continue
-        rom_info = GBRomInfo(title, checksum, mapper_type, ram_size)
+        rom_info = GBRomInfo(title, checksum, mapper_type, ram_size, cgb_compatible)
         key = _normalized_title(title)
         if key:
             index.setdefault(key, {})[checksum] = rom_info
