@@ -21,6 +21,7 @@ The [DS Style Manager](https://frankiet19.github.io/omega-de-ds-style-kernel/man
 - Optional automatic fallback toggle in SD-scan setup, also available in the first artwork-download failure prompt, to continue with configured fallback providers for later titles without repeated prompts
 - No-Intro filename cleanup for online queries that preserves region tags such as (USA), (Europe), and (Japan) while stripping language, revision, status, and square-bracket dump tags without renaming ROMs or changing output paths
 - Responsive region controls: debounce settings saves and Build Pack preview lookups; Search & Preview artwork-priority changes reorder cached results locally without issuing new provider requests
+- Jagoomba Color `.esv` and Game Boy/Game Boy Color `.sav` conversion, including multiple saves per archive and merging into existing archives without removing savestates
 
 - `120 x 80` title thumbnails for `IMGS`
 - `80 x 80` box thumbnails for `IMGS2`
@@ -48,6 +49,8 @@ To preserve the exact mirror structure, scan the actual SD-card root and keep th
 For an extension-wide default image, choose **Enter Name...**, enter the extension without a dot (for example `gb`), select its image, and build in either layout. It is written to `IMGS/CUSTOM/gb.bmp` or `IMGS2/CUSTOM/gb.bmp` according to the selected thumbnail size.
 
 Complete full-pack building remains focused on Game Boy Advance; the Custom Art scan builds images only for games that are actually on the SD card.
+
+Use **ESV <-> SAV** to scan `SYSTEM/SAVER` on an SD card. Extracted saves are written to `Converted SAV` without replacing existing files. To create or update an ESV archive, keep the matching GB/GBC ROMs on the SD card; the converter uses their cartridge titles and checksums to associate each save.
 
 ## Download and History
 

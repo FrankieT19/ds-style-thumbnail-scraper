@@ -1,0 +1,42 @@
+name: Build and publish Windows release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build Windows application
+        shell: pwsh
+        run: .\build.ps1
+
+      - name: Package application
+        shell: pwsh
+        run: Compress-Archive -Path 'dist\DS Style Thumbnail Scraper.exe' -DestinationPath 'DS.Style.Thumbnail.Scraper.zip' -Force
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $changelog = Get-Content -Raw CHANGELOG.md
+          $section = [regex]::Match($changelog, "(?ms)^## $([regex]::Escape($tag))\b.*?(?=^## |\z)")
+          if (-not $section.Success) {
+            throw "No changelog section found for $tag."
+          }
+          $notesPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          Set-Content -Path $notesPath -Value $section.Value.Trim() -Encoding utf8
+          gh release create $tag --repo $env:GITHUB_REPOSITORY --title "DS Style Thumbnail Scraper $tag" --notes-file $notesPath "DS.Style.Thumbnail.Scraper.zip"
