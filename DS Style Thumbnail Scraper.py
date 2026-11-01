@@ -3003,7 +3003,7 @@ class ThumbnailScraperApp(tk.Tk):
             side="left", padx=(8, 0)
         )
         self.esv_scan_button = ttk.Button(
-            folder_row, text="Scan", command=self.scan_esv_saver_folder
+            folder_row, text="Refresh Scan", command=self.scan_esv_saver_folder
         )
         self.esv_scan_button.pack(side="left", padx=(8, 0))
 
@@ -3042,6 +3042,7 @@ class ThumbnailScraperApp(tk.Tk):
         self.esv_build_button = ttk.Button(
             controls,
             text="Convert SAV → ESV",
+            style="Accent.TButton",
             command=self.convert_sav_files_to_esv,
         )
         self.esv_build_button.pack(side="left", padx=(8, 0))
@@ -3201,12 +3202,19 @@ class ThumbnailScraperApp(tk.Tk):
                         saves = extract_goomba_saves(archive_path.read_bytes())
                         counts: dict[str, int] = {}
                         for save in saves:
-                            name = save_filename(save.title)
-                            counts[name.casefold()] = counts.get(name.casefold(), 0) + 1
+                            title_filename = save_filename(save.title)
+                            counts[title_filename.casefold()] = (
+                                counts.get(title_filename.casefold(), 0) + 1
+                            )
                         for save in saves:
-                            name = save_filename(save.title)
-                            if counts[name.casefold()] > 1:
-                                name = f"{Path(name).stem}_{save.checksum:08X}.sav"
+                            if len(saves) == 1:
+                                name = archive_path.with_suffix(".sav").name
+                            else:
+                                title_filename = save_filename(save.title)
+                                name = f"{archive_path.stem}_{Path(title_filename).stem}"
+                                if counts[title_filename.casefold()] > 1:
+                                    name += f"_{save.checksum:08X}"
+                                name += ".sav"
                             destination = archive_path.parent / name
                             if destination.exists():
                                 failures.append(
