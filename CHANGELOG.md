@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.6
+
+- Updated compatibility information and the bundled guide for DS Style v7.5.
+- Kept the existing IMGS, IMGS2 and CUSTOM artwork layout; existing packs remain compatible.
+
 ## v1.5
 
 - Added Libretro artwork search for the additional systems supported by DS Style and Simple.
