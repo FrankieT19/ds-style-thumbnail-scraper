@@ -8,7 +8,7 @@ It builds complete Game Boy Advance thumbnail packs from Libretro or a local art
 
 Visit the [DS Style homepage](https://frankiet19.github.io/omega-de-ds-style-kernel/project/) for an overview, kernel downloads, tools and example themes.
 
-The [DS Style Manager](https://frankiet19.github.io/omega-de-ds-style-kernel/manager/) provides guided browser installation, a few starting preferences, artwork creation and installed-style management. Full artwork-pack building remains in this desktop Scraper.
+The [DS Style Manager](https://frankiet19.github.io/omega-de-ds-style-kernel/manager/) provides guided browser installation, starting preferences, artwork search, GBA and emulated-game packs, and installed-style management. This desktop Scraper remains available as an alternative.
 
 ## Features
 

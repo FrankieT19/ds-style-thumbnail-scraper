@@ -1,8 +1,8 @@
 # Changelog
 
-## v1.6
+## v1.7
 
-- Updated compatibility information and the bundled guide for DS Style v7.5.
+- Updated compatibility information and the bundled guide for DS Style v8.0.
 - Kept the existing IMGS, IMGS2 and CUSTOM artwork layout; existing packs remain compatible.
 
 ## v1.5
