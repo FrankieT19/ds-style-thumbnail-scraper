@@ -1,6 +1,6 @@
-DS STYLE THUMBNAIL SCRAPER v1.7
+DS STYLE THUMBNAIL SCRAPER v1.8
 
-For DS Style v8.0 or newer.
+For DS Style v8.1 or newer.
 
 Open DS Style User Guide.pdf for complete instructions covering thumbnail packs, artwork sources, regions, previews and custom artwork.
 
