@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.9
+
+- Updated for DS Style v8.2 and refreshed the user guide.
+
 ## v1.8
 
 - Updated DS Style compatibility information and the bundled guide to v8.1.
